@@ -12,7 +12,9 @@
 #include <atomic>
 #include <chrono>
 #include <cmath>
+#include <iomanip>
 #include <iostream>
+#include <sstream>
 #include <string>
 #include <thread>
 #include <unistd.h>
@@ -48,6 +50,13 @@ inline std::string num(long long n) {
     std::string s = std::to_string(n < 0 ? -n : n);
     for (int i = static_cast<int>(s.size()) - 3; i > 0; i -= 3) s.insert(i, ",");
     return n < 0 ? "-" + s : s;
+}
+
+// 127.4321 -> "127.43"
+inline std::string fixed(double v, int decimals = 2) {
+    std::ostringstream out;
+    out << std::fixed << std::setprecision(decimals) << v;
+    return out.str();
 }
 
 inline std::string pad(const std::string& s, int width) {

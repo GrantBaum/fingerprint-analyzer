@@ -6,19 +6,16 @@ A rule-based fingerprint matcher written in C++. It takes two fingerprint images
 
 ## Build and run
 
-You need a C++17 compiler, CMake and OpenCV. On Ubuntu or WSL:
+You need a C++17 compiler, OpenCV and pkg-config. On Ubuntu or WSL:
 
 ```bash
-sudo apt install build-essential cmake libopencv-dev
-cmake -S . -B build
-cmake --build build
-ctest --test-dir build
-./build/fpmatch match data/101_1.tif data/101_2.tif
+sudo apt install build-essential libopencv-dev pkg-config
+make run                        # builds and runs on data/101_1.tif
+make run IMG=data/104_3.tif     # a different print
+make clean                      # deletes build/ and out/
 ```
 
-Put the FVC2002 DB1_B images in `data/` (see References). They aren't committed to the repo.
-
-See [`docs/tools.md`](docs/tools.md) for how to use each OpenCV and CMake tool in this project.
+Put test prints in `data/` (see References). They aren't committed to the repo.
 
 ## Overview
 

@@ -8,6 +8,7 @@
 #include <array>
 #include <utility>
 #include <algorithm>
+#include <filesystem>
 #include <opencv2/imgcodecs.hpp>
 #include "ui.hpp"
 
@@ -18,10 +19,10 @@ struct GrayImage{
     std::vector<float> pixels;
 
     //indexing helpers
-    float& at(int x, int y){
-        return pixels[y * width + x];
+    float& at(int x, int y) {
+    return pixels[y * width + x];
     }
-    const float at(int x, int y){
+    float at(int x, int y) const {
         return pixels[y * width + x];
     }
 };
@@ -85,10 +86,10 @@ struct NormStats{
     //to make my UI cooler
     double mean;
     double stdDev;
-}
+};
 // normalize: shifts and scales pixels to mean 0, std dev 1. Changes img in place.
 NormStats normalize(GrayImage& img) {
-    float sum = 0;
+    double sum = 0;
     double mean;
     double variance = 0;
     float stdDeviation;
@@ -138,10 +139,10 @@ struct BinaryImage {
     std::vector<uint8_t> pixels;
 
     //indexing helpers
-    uint8_t& at(int x, int y){
-        return pixels[y * width + x];
+    uint8_t& at(int x, int y) {
+    return pixels[y * width + x];
     }
-    const uint8_t at(int x, int y){
+    uint8_t at(int x, int y) const {
         return pixels[y * width + x];
     }
 };
@@ -296,5 +297,69 @@ int thin(BinaryImage& img) {
     return passes;
 }
 int main(int argc, char** argv) {
+    if (argc < 2) {
+        std::cerr << "usage: " << argv[0] << " <image>" << std::endl;
+        return 1;
+    }
+    std::string path = argv[1];
 
+    const int window = 15;   // binarize window size, change to test others
+
+    std::filesystem::create_directories("out");
+    ui::banner();
+
+    try {
+        // ---- Load ----------------------------------------------------------
+        GrayImage img;
+        {
+            ui::Stage s("Loading");
+            img = loadGray(path);
+            saveGray(img, "out/00_raw.png");
+            s.done(std::to_string(img.width) + " x " + std::to_string(img.height) +
+                   "  " + std::filesystem::path(path).filename().string());
+        }
+
+        // ---- Normalize -----------------------------------------------------
+        {
+            ui::Stage s("Normalizing");
+            NormStats stats = normalize(img);   // mean and std dev of the original
+            saveGray(img, "out/01_normalized.png");
+            s.done("mean " + ui::fixed(stats.mean) + "  std " + ui::fixed(stats.stdDev));
+        }
+
+        // ---- Binarize (Checkpoint A) ---------------------------------------
+        BinaryImage bin;
+        {
+            ui::Stage s("Binarizing");
+            bin = binarize(img, window);
+            saveBinary(bin, "out/06_binary.png");
+
+            long long ridge = 0;
+            for (uint8_t p : bin.pixels) ridge += p;
+            double percent = 100.0 * ridge / bin.pixels.size();
+            s.done("window " + std::to_string(window) + "  " + ui::fixed(percent, 1) + "% ridge");
+        }
+
+        // ---- Thin (Checkpoint B) -------------------------------------------
+        {
+            ui::Stage s("Thinning");
+            long long before = 0;
+            for (uint8_t p : bin.pixels) before += p;
+
+            int passes = thin(bin);
+            saveBinary(bin, "out/07_skeleton.png");
+
+            long long after = 0;
+            for (uint8_t p : bin.pixels) after += p;
+            s.done(std::to_string(passes) + " passes  " + ui::num(before) + " -> " +
+                   ui::num(after) + " px");
+        }
+
+        ui::finalScreen(true, "Analysis complete. Images saved to out/");
+    } catch (const std::exception& e) {
+        ui::finalScreen(false, e.what());
+        return 1;
+    }
+
+    return 0;
 }

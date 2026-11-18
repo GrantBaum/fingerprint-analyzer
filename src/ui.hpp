@@ -222,6 +222,68 @@ inline void status(const std::string& text) {
     if (active) active->status(text);
 }
 
+// ---- questions and answers ---------------------------------------------------
+//
+// These print even when the UI is off, because they're the actual results
+// (or a question the user has to answer). They just skip the colors then.
+
+// Colors only when the UI is on, so piped output stays plain text.
+inline std::string paint(const char* color, const std::string& text) {
+    if (!enabled) return text;
+    return std::string(color) + text + RESET;
+}
+
+// Asks a question and returns the answer typed in, without the Enter.
+// Returns an empty string if input has run out (like a closed pipe).
+inline std::string ask(const std::string& question) {
+    std::cout << " " << paint(CYAN, "[?]") << " " << question << " " << std::flush;
+    std::string answer;
+    if (!std::getline(std::cin, answer)) return "";
+    return answer;
+}
+
+// Shows a list of choices like " [a] Catalogue this print" and returns the
+// letter picked. Keeps asking until it gets a letter from the list. Returns
+// 'q' if input runs out, so a closed pipe can't loop forever.
+inline char menu(const std::string& title, const std::string& letters,
+                 const std::string* labels) {
+    std::string rule = unicode ? "─" : "-";
+    std::cout << "\n " << paint(DIM, repeat(rule, 47)) << "\n";
+    std::cout << " " << paint(BOLD, title) << "\n";
+    for (size_t i = 0; i < letters.size(); i++) {
+        std::cout << "  " << paint(CYAN, std::string("[") + letters[i] + "]") << " " << labels[i] << "\n";
+    }
+    while (true) {
+        std::cout << " " << paint(CYAN, ">") << " " << std::flush;
+        std::string answer;
+        if (!std::getline(std::cin, answer)) return 'q';
+        if (answer.size() == 1 && letters.find(answer[0]) != std::string::npos) {
+            return answer[0];
+        }
+        std::cout << " " << paint(YELLOW, "[!] pick one of: " + letters) << "\n";
+    }
+}
+
+// A big MATCH or NO MATCH line with the score after it.
+inline void verdict(bool match, const std::string& text) {
+    if (match) std::cout << "\n " << paint(GREEN, BOLD + std::string(" MATCH ")) << "     " << text << "\n";
+    else       std::cout << "\n " << paint(RED, BOLD + std::string(" NO MATCH ")) << "  " << text << "\n";
+}
+
+// One row of a table. Each cell is padded to its width so columns line up.
+// Pass header = true for the title row, which prints bold.
+inline void tableRow(const std::string* cells, const int* widths, int count, bool header = false) {
+    std::string line;
+    for (int i = 0; i < count; i++) line += pad(cells[i], widths[i]) + "  ";
+    if (header) std::cout << "  " << paint(BOLD, line) << "\n";
+    else        std::cout << "  " << line << "\n";
+}
+
+// A plain line of text that always prints, for results like the EER.
+inline void line(const std::string& text) {
+    std::cout << " " << text << "\n";
+}
+
 // ---- final screen ------------------------------------------------------------
 //
 // Prints a final line with a blinking SUCCESS (or FAILED) badge and waits for

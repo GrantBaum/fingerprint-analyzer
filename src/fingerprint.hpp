@@ -152,3 +152,29 @@ Minutia transformMinutia(const Minutia& m, const Alignment& al);
 Alignment alignTemplates(const Template& a, const Template& b);
 MatchResult matchTemplates(const Template& a, const Template& b);
 void saveAligned(const Template& a, const Template& b, const MatchResult& result, const std::string& path);
+
+// ---- database.cpp -------------------------------------------------------------
+
+// DbEntry: one row of db/index.csv.
+struct DbEntry {
+    std::string id;         // 4 digits, like 0001
+    std::string name;
+    std::string finger;     // like "right index", or "unknown"
+    std::string raw;        // path to the original image, db/raw/0001.tif
+    std::string skeleton;   // path to the skeleton, db/skel/0001.png
+    std::string tmpl;       // path to the template, db/tmpl/0001.tmpl
+    std::string added;      // YYYY-MM-DD HH:MM
+    std::string version;    // PIPELINE_VERSION when it was analyzed
+};
+
+// SearchHit: one database print and how well it scored against the probe.
+struct SearchHit {
+    DbEntry entry;
+    MatchResult result;
+};
+
+std::vector<DbEntry> readIndex();
+std::string catalogue(const std::string& rawPath, const std::string& outDir,
+                      const std::string& name, const std::string& finger);
+std::vector<SearchHit> searchDatabase(const Template& probe, int topN);
+void discard(const std::string& outDir);

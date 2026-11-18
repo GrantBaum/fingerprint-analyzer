@@ -59,3 +59,6 @@ std::array<uint8_t, 8> getNeighbors(const BinaryImage& img, int x, int y);
 int countNeighbors(const std::array<uint8_t, 8>& p);
 int countTransitions(const std::array<uint8_t, 8>& p);
 int thin(BinaryImage& img);
+long long floodFill(BinaryImage& img, int startX, int startY, uint8_t from, uint8_t to);
+BinaryImage segmentMask(const GrayImage& img, int block, float threshold);
+void applyMask(BinaryImage& img, const BinaryImage& mask);

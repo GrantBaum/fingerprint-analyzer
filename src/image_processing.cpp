@@ -266,3 +266,161 @@ int thin(BinaryImage& img) {
 
     return passes;
 }
+
+// floodFill: sets every pixel connected to (startX, startY) that has value
+// `from` to value `to`. Returns how many pixels it changed.
+// It uses a list of pixels still to visit instead of recursion, because a big
+// region would make recursion run out of stack.
+long long floodFill(BinaryImage& img, int startX, int startY, uint8_t from, uint8_t to) {
+    if(img.at(startX, startY) != from) return 0; //nothing to fill here
+
+    long long changed = 0;
+    std::vector<std::pair<int, int>> todo;   // pixels waiting to be visited
+    todo.push_back({startX, startY});
+    img.at(startX, startY) = to;              //paint it so we never add it twice
+
+    while(!todo.empty()){
+        auto [x, y] = todo.back();
+        todo.pop_back();
+        changed++;
+
+        //check the 4 neighbors: up, down, left, right
+        const int dx[4] = {0, 0, -1, 1};
+        const int dy[4] = {-1, 1, 0, 0};
+        for(int i = 0; i < 4; i++){
+            int nx = x + dx[i];
+            int ny = y + dy[i];
+            if(nx < 0 || nx >= img.width || ny < 0 || ny >= img.height) continue; //off the image
+            if(img.at(nx, ny) != from) continue;                                 //wrong value or already painted
+            img.at(nx, ny) = to;
+            todo.push_back({nx, ny});
+        }
+    }
+    return changed;
+}
+
+// segmentMask: finds which part of the image is finger (1) and which is background (0).
+// Works on 16 x 16 blocks: ridges make a block swing between dark and light, so
+// finger blocks have high variance and flat background blocks have low variance.
+BinaryImage segmentMask(const GrayImage& img, int block, float threshold) {
+
+    //one cell per block, rounded up so the edges are covered too
+    BinaryImage blocks;
+    blocks.width = (img.width + block - 1) / block;
+    blocks.height = (img.height + block - 1) / block;
+    blocks.pixels.resize(blocks.width * blocks.height);
+
+    //loops over every block
+    for(int BY = 0; BY < blocks.height; BY++){
+        for(int BX = 0; BX < blocks.width; BX++){
+            double sum = 0;
+            double sumSq = 0;
+            int count = 0;
+
+            //loops over every pixel inside this block
+            for(int Y = BY * block; Y < (BY + 1) * block && Y < img.height; Y++){
+                for(int X = BX * block; X < (BX + 1) * block && X < img.width; X++){
+                    sum += img.at(X, Y);
+                    sumSq += img.at(X, Y) * img.at(X, Y);
+                    count++;
+                }
+            }
+
+            //variance = mean of the squares - square of the mean
+            double mean = sum / count;
+            double variance = sumSq / count - mean * mean;
+            if(variance > threshold){
+                blocks.at(BX, BY) = 1; //busy block, so it's finger
+            }
+            else{
+                blocks.at(BX, BY) = 0; //flat block, so it's background
+            }
+        }
+    }
+
+    //cleanup 0: majority vote. a block is finger only if at least 5 of the 9
+    //blocks in its 3 x 3 neighborhood are finger. this trims single blocks that
+    //stick out of the edge and fills single-block dents
+    BinaryImage smooth = blocks;
+    for(int BY = 0; BY < blocks.height; BY++){
+        for(int BX = 0; BX < blocks.width; BX++){
+            int votes = 0;
+            for(int dy = -1; dy <= 1; dy++){
+                for(int dx = -1; dx <= 1; dx++){
+                    int nx = BX + dx;
+                    int ny = BY + dy;
+                    if(nx < 0 || nx >= blocks.width || ny < 0 || ny >= blocks.height) continue; //off the grid counts as background
+                    votes += blocks.at(nx, ny);
+                }
+            }
+            if(votes >= 5){
+                smooth.at(BX, BY) = 1; //most neighbors are finger
+            }
+            else{
+                smooth.at(BX, BY) = 0; //most neighbors are background
+            }
+        }
+    }
+    blocks = smooth;
+
+    //cleanup 1: keep only the biggest blob of finger blocks.
+    //each blob gets painted 2 so we can measure it, then the winner is painted
+    //back to 1 and every other blob is erased
+    int bestX = -1;
+    int bestY = -1;
+    long long bestSize = 0;
+    for(int BY = 0; BY < blocks.height; BY++){
+        for(int BX = 0; BX < blocks.width; BX++){
+            long long size = floodFill(blocks, BX, BY, 1, 2);
+            if(size > bestSize){
+                bestSize = size;
+                bestX = BX;
+                bestY = BY;
+            }
+        }
+    }
+    if(bestX < 0){
+        throw std::runtime_error("segmentMask: no finger found, every block is flat");
+    }
+    floodFill(blocks, bestX, bestY, 2, 1); //winner back to 1
+    for(uint8_t& b : blocks.pixels){
+        if(b == 2) b = 0; //every other blob becomes background
+    }
+
+    //cleanup 2: fill holes. paint all background that touches the image edge 2.
+    //any background block still 0 after that is enclosed by finger, so it's a hole
+    for(int BX = 0; BX < blocks.width; BX++){
+        floodFill(blocks, BX, 0, 0, 2);
+        floodFill(blocks, BX, blocks.height - 1, 0, 2);
+    }
+    for(int BY = 0; BY < blocks.height; BY++){
+        floodFill(blocks, 0, BY, 0, 2);
+        floodFill(blocks, blocks.width - 1, BY, 0, 2);
+    }
+    for(uint8_t& b : blocks.pixels){
+        if(b == 0) b = 1;      //hole, fill it in
+        else if(b == 2) b = 0; //real background
+    }
+
+    //blow the block grid back up to full image size
+    BinaryImage mask;
+    mask.width = img.width;
+    mask.height = img.height;
+    mask.pixels.resize(mask.width * mask.height);
+    for(int Y = 0; Y < img.height; Y++){
+        for(int X = 0; X < img.width; X++){
+            mask.at(X, Y) = blocks.at(X / block, Y / block); //copies the block's answer
+        }
+    }
+
+    return mask;
+}
+
+// applyMask: wipes every pixel outside the finger, in place.
+void applyMask(BinaryImage& img, const BinaryImage& mask) {
+    for(int Y = 0; Y < img.height; Y++){
+        for(int X = 0; X < img.width; X++){
+            if(mask.at(X, Y) == 0) img.at(X, Y) = 0; //background speckle
+        }
+    }
+}

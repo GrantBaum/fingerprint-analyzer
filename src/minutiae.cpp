@@ -12,8 +12,6 @@
 #include "fingerprint.hpp"
 #include "ui.hpp"
 
-const double PI = 3.14159265358979323846;
-
 // ---- tuning numbers -----------------------------------------------------------
 // all in pixels at 500 dpi, where one ridge plus one valley is about 9 px
 

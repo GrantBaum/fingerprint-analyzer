@@ -13,6 +13,8 @@
 // found and re-analyzed later
 constexpr const char* PIPELINE_VERSION = "1";
 
+constexpr double PI = 3.14159265358979323846;
+
 //struct that holds one singular image of a print in grayscale
 struct GrayImage{
     int width = 0;
@@ -91,6 +93,10 @@ struct RidgeTrace {
     TraceStop stop = STOP_LENGTH;
 };
 
+double wrapAngle(double a);
+double angleDiff(double a, double b);
+double angleBetween(int x1, int y1, int x2, int y2);
+double distance(const Minutia& a, const Minutia& b);
 RidgeTrace traceRidge(const BinaryImage& skel, std::vector<std::pair<int, int>> visited,
                       int x, int y, int maxSteps);
 std::vector<Minutia> findMinutiae(const BinaryImage& skel);
@@ -118,3 +124,31 @@ struct Template {
 
 void saveTemplate(const Template& t, const std::string& path);
 Template loadTemplate(const std::string& path);
+
+// ---- matching.cpp -------------------------------------------------------------
+
+// Alignment: how to move print A on top of print B. A is turned by `rotation`
+// (radians, counterclockwise on screen, same convention as Minutia::angle)
+// around its own image center (cx, cy), then shifted by (dx, dy) pixels.
+struct Alignment {
+    double rotation = 0;
+    double dx = 0;
+    double dy = 0;
+    double cx = 0;
+    double cy = 0;
+    int votes = 0;   // how many minutia pairs agreed on this alignment
+};
+
+// MatchResult: the outcome of comparing two templates.
+struct MatchResult {
+    double score = 0;                          // 0 = nothing in common, 1 = identical
+    int matched = 0;                           // how many minutiae paired up
+    Alignment alignment;                       // the alignment that was used
+    std::vector<std::pair<int, int>> pairs;    // (index in A, index in B) for each pair
+};
+
+extern const double MATCH_THRESHOLD;
+Minutia transformMinutia(const Minutia& m, const Alignment& al);
+Alignment alignTemplates(const Template& a, const Template& b);
+MatchResult matchTemplates(const Template& a, const Template& b);
+void saveAligned(const Template& a, const Template& b, const MatchResult& result, const std::string& path);

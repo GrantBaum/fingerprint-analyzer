@@ -1,0 +1,16 @@
+DB is for holding prints in a database. The database is local on the computer to keep in the spirit
+of processing locally for security and speed reasons.
+    - index.csv holds the name, date, path to the source image AND processed image AND template, which finger (could be unknown) and an ID number for each print
+    - all the prints data will also be stored in here.
+The ID for the source image and processed image will match so that they can be paired.
+
+The templates will have just minutae and coordinates, and that is what will be compared against.
+if a match is found, the processed and unprocessed photos can be manually reviewed by the technician to
+ensure validity or at least get eyes on the subject.
+
+SRC holds all the code. It can be ran by compiling with the make command and then running with the proper arguments
+specified in the README.md documentation.
+    - image_processing.cpp processes the image for the database for comparison
+    - ui.hpp is for the cool and clean UI
+
+DOCS holds any additional info (like this file)

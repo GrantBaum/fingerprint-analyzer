@@ -10,22 +10,9 @@
 #include <algorithm>
 #include <filesystem>
 #include <opencv2/imgcodecs.hpp>
+#include "fingerprint.hpp"
 #include "ui.hpp"
 
-//struct that holds one singular image of a print in grayscale
-struct GrayImage{
-    int width;
-    int height;
-    std::vector<float> pixels;
-
-    //indexing helpers
-    float& at(int x, int y) {
-    return pixels[y * width + x];
-    }
-    float at(int x, int y) const {
-        return pixels[y * width + x];
-    }
-};
 // Load a file as grayscale into a GrayImage. Report a failed load, set width
 // and height, size pixels, copy every pixel in.
 GrayImage loadGray(const std::string& path) {
@@ -71,7 +58,9 @@ void saveGray(const GrayImage& img, const std::string& path) {
     //error checking
     if(minVal == maxVal){
         std::cerr << "saveGray: every pixel is the same value, saving a flat image" << std::endl;
-        //continue and save a flat image
+        out.setTo(0);          //flat black image, no divide by zero
+        cv::imwrite(path, out); //save image
+        return;
     }
     //stretching and saving loops
     for (int Y = 0; Y < img.height; Y++){
@@ -82,17 +71,12 @@ void saveGray(const GrayImage& img, const std::string& path) {
 
     cv::imwrite(path, out); //save image
 }
-struct NormStats{
-    //to make my UI cooler
-    double mean;
-    double stdDev;
-};
 // normalize: shifts and scales pixels to mean 0, std dev 1. Changes img in place.
 NormStats normalize(GrayImage& img) {
     double sum = 0;
     double mean;
     double variance = 0;
-    float stdDeviation;
+    double stdDeviation;
 
     //first find the mean
     for (int Y = 0; Y < img.height; Y++){
@@ -132,20 +116,6 @@ NormStats normalize(GrayImage& img) {
 
 }
 
-// BinaryImage: same idea as GrayImage, but every pixel is 1 (ridge) or 0 (valley).
-struct BinaryImage {
-    int width;
-    int height;
-    std::vector<uint8_t> pixels;
-
-    //indexing helpers
-    uint8_t& at(int x, int y) {
-    return pixels[y * width + x];
-    }
-    uint8_t at(int x, int y) const {
-        return pixels[y * width + x];
-    }
-};
 // localMean: average of the window x window square centered on (cx, cy).
 float localMean(const GrayImage& img, int cx, int cy, int window) {
     int half = window / 2;   // window 15 -> 7 pixels on each side of center
@@ -295,71 +265,4 @@ int thin(BinaryImage& img) {
     } while (changed);
 
     return passes;
-}
-int main(int argc, char** argv) {
-    if (argc < 2) {
-        std::cerr << "usage: " << argv[0] << " <image>" << std::endl;
-        return 1;
-    }
-    std::string path = argv[1];
-
-    const int window = 15;   // binarize window size, change to test others
-
-    std::filesystem::create_directories("out");
-    ui::banner();
-
-    try {
-        // ---- Load ----------------------------------------------------------
-        GrayImage img;
-        {
-            ui::Stage s("Loading");
-            img = loadGray(path);
-            saveGray(img, "out/00_raw.png");
-            s.done(std::to_string(img.width) + " x " + std::to_string(img.height) +
-                   "  " + std::filesystem::path(path).filename().string());
-        }
-
-        // ---- Normalize -----------------------------------------------------
-        {
-            ui::Stage s("Normalizing");
-            NormStats stats = normalize(img);   // mean and std dev of the original
-            saveGray(img, "out/01_normalized.png");
-            s.done("mean " + ui::fixed(stats.mean) + "  std " + ui::fixed(stats.stdDev));
-        }
-
-        // ---- Binarize (Checkpoint A) ---------------------------------------
-        BinaryImage bin;
-        {
-            ui::Stage s("Binarizing");
-            bin = binarize(img, window);
-            saveBinary(bin, "out/06_binary.png");
-
-            long long ridge = 0;
-            for (uint8_t p : bin.pixels) ridge += p;
-            double percent = 100.0 * ridge / bin.pixels.size();
-            s.done("window " + std::to_string(window) + "  " + ui::fixed(percent, 1) + "% ridge");
-        }
-
-        // ---- Thin (Checkpoint B) -------------------------------------------
-        {
-            ui::Stage s("Thinning");
-            long long before = 0;
-            for (uint8_t p : bin.pixels) before += p;
-
-            int passes = thin(bin);
-            saveBinary(bin, "out/07_skeleton.png");
-
-            long long after = 0;
-            for (uint8_t p : bin.pixels) after += p;
-            s.done(std::to_string(passes) + " passes  " + ui::num(before) + " -> " +
-                   ui::num(after) + " px");
-        }
-
-        ui::finalScreen(true, "Analysis complete. Images saved to out/");
-    } catch (const std::exception& e) {
-        ui::finalScreen(false, e.what());
-        return 1;
-    }
-
-    return 0;
 }

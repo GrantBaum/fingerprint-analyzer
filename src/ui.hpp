@@ -32,6 +32,10 @@ inline bool unicode = true;
 // Width of the stage name column, so bars line up.
 inline int nameWidth = 14;
 
+// Every stage stays on screen at least this long, so fast stages don't just
+// flash by. eval sets it to 0 because it runs hundreds of prints.
+inline int minStageMs = 250;
+
 // ---- colors (ANSI escape codes) --------------------------------------------
 
 constexpr const char* RESET  = "\033[0m";
@@ -185,6 +189,9 @@ private:
     void finish(bool ok, const std::string& detail) {
         finished_ = true;
         if (!enabled) return;
+        // wait out the rest of minStageMs so the "..." line can be seen
+        long long left = minStageMs - elapsedMs();
+        if (ok && left > 0) std::this_thread::sleep_for(std::chrono::milliseconds(left));
         std::cout << CLEAR_LINE << " ";
         if (ok) {
             std::cout << GREEN << "[+]" << RESET << " " << pad(name_, nameWidth)

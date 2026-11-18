@@ -2,7 +2,8 @@ CXX      := g++
 CXXFLAGS := -std=c++17 -Wall -Wextra -O2 -pthread
 OPENCV   := $(shell pkg-config --cflags --libs opencv4)
 
-SRC := src/image_processing.cpp
+SRC := $(wildcard src/*.cpp)
+HDR := $(wildcard src/*.hpp)
 BIN := build/fpmatch
 IMG ?= data/101_1.tif
 
@@ -13,7 +14,7 @@ IMG ?= data/101_1.tif
 
 all: $(BIN)
 
-$(BIN): $(SRC) src/ui.hpp
+$(BIN): $(SRC) $(HDR)
 	@mkdir -p build
 	$(CXX) $(CXXFLAGS) $(SRC) -o $(BIN) $(OPENCV)
 

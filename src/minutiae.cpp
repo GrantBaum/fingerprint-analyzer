@@ -1,5 +1,8 @@
 //nessecary libs for ts
 #include <cmath>
+#include <fstream>
+#include <iomanip>
+#include <limits>
 #include <stdexcept>
 #include <string>
 #include <utility>
@@ -383,4 +386,70 @@ std::vector<Minutia> filterMinutiae(const std::vector<Minutia>& minutiae, const 
         if(keep[i]) kept.push_back(minutiae[i]);
     }
     return kept;
+}
+
+// saveTemplate: writes a template as plain text. The first line is a header:
+//     fpmatch-template <version> <width> <height> <count>
+// then one minutia per line:  x y angle type   (type is "ending" or "bifurcation")
+void saveTemplate(const Template& t, const std::string& path) {
+    std::ofstream out(path);
+    if(!out){
+        throw std::runtime_error("saveTemplate: could not open " + path);
+    }
+
+    //max_digits10 (17 for a double) is the number of digits that always reads
+    //back as the exact same double, so a save and load gives identical angles
+    out << std::setprecision(std::numeric_limits<double>::max_digits10);
+
+    out << "fpmatch-template " << PIPELINE_VERSION << " " << t.width << " " << t.height
+        << " " << t.minutiae.size() << "\n";
+    for(const Minutia& m : t.minutiae){
+        std::string type = "bifurcation";
+        if(m.type == ENDING) type = "ending";
+        out << m.x << " " << m.y << " " << m.angle << " " << type << "\n"; //one minutia per line
+    }
+
+    if(!out){
+        throw std::runtime_error("saveTemplate: could not write " + path);
+    }
+}
+
+// loadTemplate: reads a template written by saveTemplate.
+Template loadTemplate(const std::string& path) {
+    std::ifstream in(path);
+    if(!in){
+        throw std::runtime_error("loadTemplate: could not open " + path);
+    }
+
+    //check the header line
+    std::string magic;
+    std::string version;
+    size_t count = 0;
+    Template t;
+    in >> magic >> version >> t.width >> t.height >> count;
+    if(!in || magic != "fpmatch-template"){
+        throw std::runtime_error("loadTemplate: " + path + " is not a template file");
+    }
+
+    //read one minutia per line
+    for(size_t i = 0; i < count; i++){
+        Minutia m;
+        std::string type;
+        in >> m.x >> m.y >> m.angle >> type;
+        if(!in){
+            throw std::runtime_error("loadTemplate: " + path + " ends early at minutia " + std::to_string(i));
+        }
+        if(type == "ending"){
+            m.type = ENDING;
+        }
+        else if(type == "bifurcation"){
+            m.type = BIFURCATION;
+        }
+        else{
+            throw std::runtime_error("loadTemplate: unknown minutia type \"" + type + "\" in " + path);
+        }
+        t.minutiae.push_back(m);
+    }
+
+    return t;
 }

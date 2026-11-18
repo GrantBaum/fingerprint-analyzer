@@ -107,3 +107,14 @@ struct FilterReport {
 
 std::vector<Minutia> filterMinutiae(const std::vector<Minutia>& minutiae, const BinaryImage& skel,
                                     const BinaryImage& mask, FilterReport& report);
+
+// Template: everything we keep about one print, the minutiae plus the size of
+// the image they came from. This is what gets compared, not the picture.
+struct Template {
+    int width = 0;
+    int height = 0;
+    std::vector<Minutia> minutiae;
+};
+
+void saveTemplate(const Template& t, const std::string& path);
+Template loadTemplate(const std::string& path);

@@ -6,6 +6,7 @@
 #include <array>
 #include <cstdint>
 #include <string>
+#include <utility>
 #include <vector>
 
 // bump this whenever the pipeline changes, so old templates in db/ can be
@@ -62,3 +63,35 @@ int thin(BinaryImage& img);
 long long floodFill(BinaryImage& img, int startX, int startY, uint8_t from, uint8_t to);
 BinaryImage segmentMask(const GrayImage& img, int block, float threshold);
 void applyMask(BinaryImage& img, const BinaryImage& mask);
+
+// ---- minutiae.cpp -------------------------------------------------------------
+
+// the type numbers match the crossing number that finds them
+enum MinutiaType { ENDING = 1, BIFURCATION = 3 };
+
+// Minutia: one ridge ending or bifurcation.
+// Angle convention: radians from 0 to 2π, like on a math graph. 0 points right,
+// π/2 points UP on screen and angles grow counterclockwise. Image y points down,
+// so every atan2 in this project flips dy: atan2(-(y2 - y1), x2 - x1).
+// An ending points out of the ridge tip. A bifurcation points away from the
+// single ridge (the trunk) toward the gap between the two branches.
+struct Minutia {
+    int x = 0;
+    int y = 0;
+    double angle = 0;
+    MinutiaType type = ENDING;
+};
+
+// why traceRidge stopped walking
+enum TraceStop { STOP_LENGTH, STOP_ENDING, STOP_JUNCTION, STOP_BORDER };
+
+// RidgeTrace: the pixels visited while walking along a ridge, and why it stopped.
+struct RidgeTrace {
+    std::vector<std::pair<int, int>> path;
+    TraceStop stop = STOP_LENGTH;
+};
+
+RidgeTrace traceRidge(const BinaryImage& skel, std::vector<std::pair<int, int>> visited,
+                      int x, int y, int maxSteps);
+std::vector<Minutia> findMinutiae(const BinaryImage& skel);
+void saveMinutiae(const BinaryImage& skel, const std::vector<Minutia>& minutiae, const std::string& path);

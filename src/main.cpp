@@ -2,6 +2,7 @@
 #include <filesystem>
 #include <iostream>
 #include <string>
+#include <vector>
 #include "fingerprint.hpp"
 #include "ui.hpp"
 
@@ -80,6 +81,21 @@ int main(int argc, char** argv) {
             for (uint8_t p : bin.pixels) after += p;
             s.done(std::to_string(passes) + " passes  " + ui::num(before) + " -> " +
                    ui::num(after) + " px");
+        }
+
+        // ---- Minutiae -------------------------------------------------------
+        std::vector<Minutia> minutiae;
+        {
+            ui::Stage s("Minutiae");
+            minutiae = findMinutiae(bin);
+            saveMinutiae(bin, minutiae, outDir + "08_minutiae.png");
+
+            int endings = 0;
+            for (const Minutia& m : minutiae) {
+                if (m.type == ENDING) endings++;
+            }
+            s.done(std::to_string(minutiae.size()) + " found  " + std::to_string(endings) +
+                   " endings  " + std::to_string(minutiae.size() - endings) + " bifurcations");
         }
 
         ui::finalScreen(true, "Analysis complete. Images saved to " + outDir);

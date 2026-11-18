@@ -98,6 +98,19 @@ int main(int argc, char** argv) {
                    " endings  " + std::to_string(minutiae.size() - endings) + " bifurcations");
         }
 
+        // ---- Filter --------------------------------------------------------
+        {
+            ui::Stage s("Filtering");
+            FilterReport report;
+            size_t before = minutiae.size();
+            minutiae = filterMinutiae(minutiae, bin, mask, report);
+            saveMinutiae(bin, minutiae, outDir + "09_filtered.png");
+            s.done(std::to_string(before) + " -> " + std::to_string(minutiae.size()) + " minutiae");
+            ui::info("border " + std::to_string(report.border) + "  spurs " + std::to_string(report.spurs) +
+                     "  islands " + std::to_string(report.islands) + "  broken " + std::to_string(report.broken) +
+                     "  close " + std::to_string(report.close));
+        }
+
         ui::finalScreen(true, "Analysis complete. Images saved to " + outDir);
     } catch (const std::exception& e) {
         ui::finalScreen(false, e.what());

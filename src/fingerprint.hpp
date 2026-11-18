@@ -95,3 +95,15 @@ RidgeTrace traceRidge(const BinaryImage& skel, std::vector<std::pair<int, int>> 
                       int x, int y, int maxSteps);
 std::vector<Minutia> findMinutiae(const BinaryImage& skel);
 void saveMinutiae(const BinaryImage& skel, const std::vector<Minutia>& minutiae, const std::string& path);
+
+// FilterReport: how many minutiae each filter check removed.
+struct FilterReport {
+    int border = 0;
+    int spurs = 0;
+    int islands = 0;
+    int broken = 0;
+    int close = 0;
+};
+
+std::vector<Minutia> filterMinutiae(const std::vector<Minutia>& minutiae, const BinaryImage& skel,
+                                    const BinaryImage& mask, FilterReport& report);

@@ -11,8 +11,29 @@
 
 const double PI = 3.14159265358979323846;
 
-// how far to walk along the ridge to measure a minutia's angle, in pixels
+// ---- tuning numbers -----------------------------------------------------------
+// all in pixels at 500 dpi, where one ridge plus one valley is about 9 px
+
+// how far to walk along the ridge to measure a minutia's angle
 const int ANGLE_TRACE_STEPS = 10;
+
+// filter: a minutia must have finger (mask) all around it this far out
+const int BORDER_MARGIN = 12;
+
+// filter: a branch shorter than this that ends is a spur
+const int SPUR_LENGTH = 12;
+
+// filter: a whole ridge shorter than this (ending to ending) is an island
+const int ISLAND_LENGTH = 15;
+
+// filter: two endings closer than this that face each other are a broken ridge
+const int BREAK_DISTANCE = 15;
+
+// filter: how close (in degrees) "facing each other" has to be
+const double BREAK_ANGLE_DEG = 45;
+
+// filter: any two minutiae closer than this are both noise
+const int MIN_DISTANCE = 6;
 
 // x and y offsets of the 8 neighbors, in the same order as getNeighbors:
 // P2 up, P3 up-right, P4 right, P5 down-right, P6 down, P7 down-left, P8 left, P9 up-left
@@ -76,8 +97,8 @@ RidgeTrace traceRidge(const BinaryImage& skel, std::vector<std::pair<int, int>> 
         }
 
         //on a staircase there can be 2 choices that touch each other. prefer the
-        //straight one (up, down, left or right) and mark both as visited so the
-        //other one doesn't look like a new branch later
+        //straight one (up, down, left or right): the diagonal one is still next
+        //to it, so the walk just picks it up on the following step
         std::pair<int, int> pick = next[0];
         for(const auto& [nx, ny] : next){
             if(nx == x || ny == y){
@@ -85,7 +106,7 @@ RidgeTrace traceRidge(const BinaryImage& skel, std::vector<std::pair<int, int>> 
                 break;
             }
         }
-        for(const auto& n : next) visited.push_back(n);
+        visited.push_back(pick);
 
         x = pick.first;
         y = pick.second;
@@ -231,4 +252,135 @@ void saveMinutiae(const BinaryImage& skel, const std::vector<Minutia>& minutiae,
     }
 
     cv::imwrite(path, color); //save image
+}
+
+// angleDiff: smallest difference between two angles, 0 to π.
+double angleDiff(double a, double b) {
+    double d = std::fabs(wrapAngle(a) - wrapAngle(b));
+    if(d > PI) d = 2 * PI - d; //go the short way around the circle
+    return d;
+}
+
+// distance: straight line distance between two minutiae in pixels.
+double distance(const Minutia& a, const Minutia& b) {
+    double dx = a.x - b.x;
+    double dy = a.y - b.y;
+    return std::sqrt(dx * dx + dy * dy);
+}
+
+// filterMinutiae: removes minutiae that are probably fake, and counts why.
+// Each check only looks at minutiae that survived the checks before it.
+std::vector<Minutia> filterMinutiae(const std::vector<Minutia>& minutiae, const BinaryImage& skel,
+                                    const BinaryImage& mask, FilterReport& report) {
+    int n = minutiae.size();
+    std::vector<bool> keep(n, true);
+    report = FilterReport();
+
+    //check 1: near the mask edge. ridges get cut off at the edge of the finger,
+    //so every ridge there looks like it ends
+    for(int i = 0; i < n; i++){
+        const Minutia& m = minutiae[i];
+        bool inside = true;
+        for(int Y = m.y - BORDER_MARGIN; Y <= m.y + BORDER_MARGIN && inside; Y++){
+            for(int X = m.x - BORDER_MARGIN; X <= m.x + BORDER_MARGIN; X++){
+                if(X < 0 || Y < 0 || X >= mask.width || Y >= mask.height || mask.at(X, Y) == 0){
+                    inside = false; //off the image or off the finger
+                    break;
+                }
+            }
+        }
+        if(!inside){
+            keep[i] = false;
+            report.border++;
+        }
+    }
+
+    //check 2: spurs and islands. walk from every ending along its ridge.
+    //  hit a junction soon   -> spur, a tiny branch sticking off a ridge
+    //  hit another end soon  -> island, a tiny piece of ridge on its own
+    for(int i = 0; i < n; i++){
+        if(!keep[i] || minutiae[i].type != ENDING) continue;
+        const Minutia& m = minutiae[i];
+
+        //step onto the ridge, the ending only has one neighbor group
+        std::array<uint8_t, 8> p = getNeighbors(skel, m.x, m.y);
+        int first = 0;
+        while(p[first] == 0) first++;
+        RidgeTrace t = traceRidge(skel, {{m.x, m.y}}, m.x + NEIGHBOR_DX[first], m.y + NEIGHBOR_DY[first], ISLAND_LENGTH);
+        auto [ex, ey] = t.path.back(); //where the walk stopped
+        int steps = t.path.size();
+
+        if(t.stop == STOP_JUNCTION && steps <= SPUR_LENGTH){
+            keep[i] = false;
+            report.spurs++;
+            //the bifurcation at the root of the spur is fake too
+            for(int j = 0; j < n; j++){
+                if(keep[j] && minutiae[j].type == BIFURCATION &&
+                   std::abs(minutiae[j].x - ex) <= 2 && std::abs(minutiae[j].y - ey) <= 2){
+                    keep[j] = false;
+                    report.spurs++;
+                }
+            }
+        }
+        else if(t.stop == STOP_ENDING){
+            keep[i] = false;
+            report.islands++;
+            //the ending at the other end of the island is fake too
+            for(int j = 0; j < n; j++){
+                if(j != i && keep[j] && minutiae[j].x == ex && minutiae[j].y == ey){
+                    keep[j] = false;
+                    report.islands++;
+                }
+            }
+        }
+    }
+
+    //check 3: broken ridges. two endings close together that point at each
+    //other are one ridge with a gap in it (a pore, a crease or a dry spot)
+    const double breakAngle = BREAK_ANGLE_DEG * PI / 180;
+    for(int i = 0; i < n; i++){
+        if(!keep[i] || minutiae[i].type != ENDING) continue;
+        for(int j = i + 1; j < n; j++){
+            if(!keep[j] || minutiae[j].type != ENDING) continue;
+            const Minutia& a = minutiae[i];
+            const Minutia& b = minutiae[j];
+            if(distance(a, b) > BREAK_DISTANCE) continue; //too far apart
+
+            //does a point toward b, and does b point toward a?
+            bool aFacesB = angleDiff(a.angle, angleBetween(a.x, a.y, b.x, b.y)) < breakAngle;
+            bool bFacesA = angleDiff(b.angle, angleBetween(b.x, b.y, a.x, a.y)) < breakAngle;
+            if(aFacesB && bFacesA){
+                keep[i] = false;
+                keep[j] = false;
+                report.broken += 2;
+                break; //a is gone, move on to the next i
+            }
+        }
+    }
+
+    //check 4: anything still crowded together is noise, so drop both
+    std::vector<bool> crowded(n, false);
+    for(int i = 0; i < n; i++){
+        if(!keep[i]) continue;
+        for(int j = i + 1; j < n; j++){
+            if(!keep[j]) continue;
+            if(distance(minutiae[i], minutiae[j]) < MIN_DISTANCE){
+                crowded[i] = true;
+                crowded[j] = true;
+            }
+        }
+    }
+    for(int i = 0; i < n; i++){
+        if(crowded[i]){
+            keep[i] = false;
+            report.close++;
+        }
+    }
+
+    //copy out the survivors
+    std::vector<Minutia> kept;
+    for(int i = 0; i < n; i++){
+        if(keep[i]) kept.push_back(minutiae[i]);
+    }
+    return kept;
 }

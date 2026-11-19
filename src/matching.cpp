@@ -8,63 +8,21 @@
 #include <opencv2/imgproc.hpp>
 #include "fingerprint.hpp"
 
-// =============================================================================
-//  TUNING NUMBERS. Every number that changes how matching behaves is here.
-//  Change one at a time and rerun "fpmatch eval" to see what it does.
-// =============================================================================
-
-// Hough voting bins. Too fine and real matches split across many bins, too
-// coarse and wrong alignments win by accident.
+//tuning
 const double ROTATION_BIN_DEG = 5;     // width of one rotation bin
 const double SHIFT_BIN_PX = 8;         // width of one dx or dy bin
-
-// The biggest rotation and shift we search. Scanners hold the finger roughly
-// upright, so huge rotations are almost always wrong answers.
 const double MAX_ROTATION_DEG = 60;
 const double MAX_SHIFT_PX = 300;
-
-// Only let an ending vote with an ending and a bifurcation with a bifurcation.
-// Pressing harder can turn an ending into a bifurcation, so this was off at
-// first. With Gabor enhancement the types are reliable enough that it helps:
-// EER 15.5% -> 15.3% and far fewer impostor votes.
 const bool SAME_TYPE_ONLY = true;
-
-// How many of the best Hough peaks to try. Each one gets paired up and scored,
-// and the best score wins. A noisy bin can beat the true one by a vote or two,
-// so trying a few makes sure the real alignment gets a turn.
 const int HOUGH_PEAKS = 5;
-
-// Pairing: after alignment, two minutiae pair up when they are this close.
-// Skin stretches, so these need some slack.
 const double MATCH_DISTANCE_PX = 12;
 const double MATCH_ANGLE_DEG = 20;
-
-// Use the bigger ridge shapes (dots, short ridges, spurs, lakes, crossovers)
-// when matching, not just endings and bifurcations. A shape only pairs with
-// the same kind of shape. Off, because they made it worse: EER 13.5% -> 15.3%.
-// A small change in pressure turns a lake into two bifurcations or a short
-// ridge into a broken one, so the shapes rarely show up the same way twice.
-// They still go in the template and the pictures for the examiner to look at.
 const bool USE_SHAPES = false;
-
-// A print with fewer minutiae than this can't be matched with any confidence.
 const int MIN_MINUTIAE = 5;
-
-// Overlap: two impressions of a finger rarely cover the same skin. A minutia
-// only counts toward the score if it landed within this distance of some
-// minutia of the other print, meaning it's inside the area both prints share.
 const bool OVERLAP_ONLY = false;
 const double OVERLAP_RADIUS_PX = 40;
-
-// Overlap: never divide by fewer than this many minutiae, so a tiny overlap
-// with 3 lucky pairs can't score like a full match.
 const int MIN_OVERLAP = 10;
-
-// Scores at or above this are called a MATCH. Set from the EER of "fpmatch eval".
 extern const double MATCH_THRESHOLD = 0.028;
-
-// =============================================================================
-
 const double DEG = PI / 180; //multiply degrees by this to get radians
 
 // transformMinutia: turns a minutia from print A by the alignment and shifts it,
@@ -92,13 +50,6 @@ Minutia transformMinutia(const Minutia& m, const Alignment& al) {
 
 // alignTemplates: finds the rotations and shifts that put the most minutiae of
 // A on top of minutiae of B, using Hough voting. Returns the HOUGH_PEAKS best.
-//
-// The idea: if a minutia in A really is the same point as a minutia in B, then
-// the difference between their angles is the rotation, and after turning A by
-// that much, the gap between them is the shift. Every possible pair (one from
-// A, one from B) works out that rotation and shift and casts one vote for it.
-// Wrong pairs vote all over the place. Right pairs all vote for the same
-// answer, so that bin piles up votes and wins.
 std::vector<Alignment> alignTemplates(const Template& a, const Template& b) {
     Alignment al;
     al.cx = a.width / 2.0;

@@ -12,45 +12,31 @@
 #include "fingerprint.hpp"
 #include "ui.hpp"
 
-// ---- tuning numbers -----------------------------------------------------------
-// all in pixels at 500 dpi, where one ridge plus one valley is about 9 px
+//tuning
 
-// how far to walk along the ridge to measure a minutia's angle
-const int ANGLE_TRACE_STEPS = 10;
-
-// filter: a minutia must have finger (mask) all around it this far out
-const int BORDER_MARGIN = 12;
-
-// filter: a branch shorter than this that ends is noise (a fake spur)
-const int SPUR_LENGTH = 12;
-
+const int ANGLE_TRACE_STEPS = 10; // how far to walk along the ridge to measure a minutia's angle
+const int BORDER_MARGIN = 12; // filter: a minutia must have finger (mask) all around it this far out
+const int SPUR_LENGTH = 12; // filter: a branch shorter than this that ends is noise (a fake spur)
 // filter: a whole ridge shorter than this (ending to ending) is noise (a fake island)
 const int ISLAND_LENGTH = 15;
-
 // filter: an island this short with no other ridge near it is a real dot, not noise
 const int DOT_LENGTH = 6;
 const int DOT_CLEARANCE = 3;
-
 // shapes: the longest a short ridge, a spur or each side of a lake can be.
 // 40 px is about 4 ridge widths. Anything longer is just ordinary ridges
 const int SHORT_RIDGE_LENGTH = 40;
 const int SPUR_MAX_LENGTH = 25;
 const int LAKE_LENGTH = 40;
-
 // shapes: a crossover is a ridge at most this long joining two ridges, and it
 // has to run across them by at least this angle
 const int CROSSOVER_LENGTH = 20;
 const double CROSSOVER_ANGLE_DEG = 45;
-
 // filter: two endings closer than this that face each other are a broken ridge
 const int BREAK_DISTANCE = 15;
-
 // filter: how close (in degrees) "facing each other" has to be
 const double BREAK_ANGLE_DEG = 45;
-
 // filter: any two minutiae closer than this are both noise
 const int MIN_DISTANCE = 6;
-
 // x and y offsets of the 8 neighbors, in the same order as getNeighbors:
 // P2 up, P3 up-right, P4 right, P5 down-right, P6 down, P7 down-left, P8 left, P9 up-left
 const int NEIGHBOR_DX[8] = {0, 1, 1, 1, 0, -1, -1, -1};

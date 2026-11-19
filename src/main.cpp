@@ -10,13 +10,9 @@
 #include "fingerprint.hpp"
 #include "ui.hpp"
 
-// ---- pipeline settings ------------------------------------------------------
 const int BINARIZE_WINDOW = 15;      // binarize window size, change to test others
 const int MASK_BLOCK = 16;           // segmentation block size in pixels
 const float MASK_VARIANCE = 0.1f;    // blocks below this variance are background
-
-// orientation, frequency and Gabor enhancement before binarize. on by default
-// because it cut the EER on DB1_B from 24.0% to 15.5%. --no-enhance turns it off
 bool useEnhance = true;
 
 // pipelineVersion: what goes in the version column of index.csv. Templates made

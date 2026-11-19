@@ -195,6 +195,7 @@ std::string catalogue(const std::string& rawPath, const std::string& outDir,
                       const std::string& name, const std::string& finger, const std::string& version);
 std::vector<SearchHit> searchDatabase(const Template& probe, int topN);
 void discard(const std::string& outDir);
+int wipeDatabase();
 
 // ---- enhance.cpp --------------------------------------------------------------
 

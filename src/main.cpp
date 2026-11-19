@@ -294,13 +294,17 @@ void runSearch(const Template& t) {
 
 // runMenu: the menu shown after analyzing a print. Results wait in outDir until
 // the user catalogues or discards them. Returns the text for the final screen.
-std::string runMenu(const std::string& path, const std::string& outDir, const Template& t) {
+// From the start menu (fromLocker) the last choice says Done instead of Quit,
+// since the next menu can scan another print.
+std::string runMenu(const std::string& path, const std::string& outDir, const Template& t, bool fromLocker = false) {
+    std::string last = "Quit (leave results in " + outDir + ")";
+    if(fromLocker) last = "Done (leave results in " + outDir + ")";
     const std::string labels[5] = {
         "Catalogue this print",
         "Compare against another print",
         "Search the database",
         "Discard results",
-        "Quit (leave results in " + outDir + ")"
+        last
     };
 
     while(true){
@@ -421,11 +425,11 @@ std::string runBatch(const std::string& folder) {
 
 // runSingle: the normal one print analysis. Runs the pipeline, then the case
 // menu. Returns the text for the final screen.
-std::string runSingle(const std::string& path) {
+std::string runSingle(const std::string& path, bool fromLocker = false) {
     std::string outDir = outDirFor(path);
     Template t = analyzePrint(path, outDir);
     ui::success("Analysis complete. Results waiting in " + outDir);
-    return runMenu(path, outDir, t);
+    return runMenu(path, outDir, t, fromLocker);
 }
 
 // DataEntry: one thing in data/ that the start menu can pick, a print or a
@@ -472,6 +476,38 @@ bool confirmBatch(const std::string& folder, int prints) {
     return false;
 }
 
+// confirmWord: for things that can't be undone. The user has to type the word
+// exactly, anything else cancels.
+bool confirmWord(const std::string& what, const std::string& word) {
+    ui::warn(what + ". This can't be undone.");
+    std::string answer = ui::ask("Type " + word + " to go ahead, anything else cancels:");
+    if(answer == word) return true;
+    ui::info("cancelled, nothing was deleted");
+    return false;
+}
+
+// clearData: deletes every file and folder in data/. Returns how many went.
+int clearData() {
+    int count = 0;
+    if(!std::filesystem::is_directory("data")) return 0;
+    for(const auto& item : std::filesystem::directory_iterator("data")){
+        if(item.path().filename() == ".gitkeep") continue;
+        std::filesystem::remove_all(item.path());
+        count++;
+    }
+    return count;
+}
+
+// askNext: after a print from the start menu is done, asks whether to scan
+// another one. Returns true to go back to the evidence locker.
+bool askNext() {
+    const std::string labels[2] = {
+        "Scan another print (back to the evidence locker)",
+        "Close the case"
+    };
+    return ui::menu("NEXT", "nq", labels) == 'n';
+}
+
 // runStart: the start menu, shown when fpmatch runs with no arguments. Lists
 // everything in data/ so a print can be dragged in there and picked by number.
 // Returns the text for the final screen, or "" to quit without one.
@@ -504,6 +540,16 @@ std::string runStart() {
             std::cout << "  " << ui::paint(ui::CYAN, "[a]") << " Catalogue every print in data/ (fast mode)\n";
         }
         std::cout << "  " << ui::paint(ui::CYAN, "[r]") << " Rescan data/\n";
+        bool dataHasFiles = std::filesystem::is_directory("data") && !std::filesystem::is_empty("data");
+        if(dataHasFiles){
+            std::cout << "  " << ui::paint(ui::CYAN, "[x]") << " Clear data/ (deletes everything in it)\n";
+        }
+        int dbPrints = readIndex().size();
+        if(dbPrints > 0){
+            std::string count = std::to_string(dbPrints) + " prints";
+            if(dbPrints == 1) count = "1 print";
+            std::cout << "  " << ui::paint(ui::CYAN, "[w]") << " Wipe the database (" << count << ")\n";
+        }
         std::cout << "  " << ui::paint(ui::CYAN, "[q]") << " Quit\n";
 
         //keep asking until the answer makes sense
@@ -513,6 +559,22 @@ std::string runStart() {
             if(!std::getline(std::cin, answer)) return ""; //input ran out
             if(answer == "q") return "";
             if(answer == "r") break; //back to the top, which scans again
+            if(answer == "x" && dataHasFiles){
+                if(confirmWord("Every file and folder in data/ will be deleted", "CLEAR")){
+                    ui::Stage s("Clearing");
+                    int gone = clearData();
+                    s.done(std::to_string(gone) + " items deleted from data/");
+                }
+                break;
+            }
+            if(answer == "w" && dbPrints > 0){
+                if(confirmWord("All " + std::to_string(dbPrints) + " prints in the database will be deleted", "WIPE")){
+                    ui::Stage s("Wiping");
+                    int gone = wipeDatabase();
+                    s.done(std::to_string(gone) + " prints deleted from db/");
+                }
+                break;
+            }
             if(answer == "a" && images > 0){
                 if(confirmBatch("data/", images)) return runBatch("data");
                 break;
@@ -527,17 +589,22 @@ std::string runStart() {
                 int pick = std::stoi(answer);
                 if(pick >= 1 && pick <= (int)entries.size()){
                     const DataEntry& e = entries[pick - 1];
-                    if(!e.folder) return runSingle(e.path);
+                    if(!e.folder){
+                        std::string result = runSingle(e.path, true);
+                        ui::success(result);
+                        if(!askNext()) return result;
+                        break; //back to the top for the next print
+                    }
                     if(confirmBatch(e.path + "/", e.prints)) return runBatch(e.path);
                     break;
                 }
             }
             if(entries.empty()){
-                std::cout << " " << ui::paint(ui::YELLOW, "[!] pick r or q") << "\n";
+                std::cout << " " << ui::paint(ui::YELLOW, "[!] pick a letter from the list") << "\n";
             }
             else{
                 std::cout << " " << ui::paint(ui::YELLOW, "[!] pick a number from 1 to " + std::to_string(entries.size()) +
-                                              ", or a, r or q") << "\n";
+                                              ", or a letter from the list") << "\n";
             }
         }
     }

@@ -176,6 +176,29 @@ std::vector<SearchHit> searchDatabase(const Template& probe, int topN) {
     return hits;
 }
 
+// wipeDatabase: deletes every catalogued print, meaning the files in db/raw,
+// db/skel and db/tmpl and every row of index.csv. The folders and their
+// .gitkeep files stay. Returns how many prints the index had.
+int wipeDatabase() {
+    int count = readIndex().size();
+    const std::string folders[3] = {"raw", "skel", "tmpl"};
+    for(const std::string& sub : folders){
+        fs::path dir = DB_DIR + sub;
+        if(!fs::is_directory(dir)) continue;
+        for(const auto& item : fs::directory_iterator(dir)){
+            if(item.path().filename() == ".gitkeep") continue; //keeps the folder in git
+            fs::remove_all(item.path());
+        }
+    }
+
+    //an empty index. catalogue writes the header again when it sees an empty file
+    std::ofstream index(INDEX_PATH, std::ios::trunc);
+    if(!index){
+        throw std::runtime_error("wipeDatabase: could not empty " + INDEX_PATH);
+    }
+    return count;
+}
+
 // discard: deletes a print's waiting results in out/.
 void discard(const std::string& outDir) {
     fs::remove_all(outDir);

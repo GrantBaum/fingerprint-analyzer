@@ -121,8 +121,10 @@ Every stage saves a picture in `out/<print name>/`, numbered in pipeline order.
 
 ```
 fpmatch-template 1 388 374 23
-210 39 5.7760868027872494 ending
-118 152 1.2490457723982544 bifurcation
+211 39 5.7838385854994563 ending
+192 49 2.7610862764774282 ending
+176 81 2.7233683240105648 bifurcation
+...
 ```
 
 The header is `fpmatch-template <version> <width> <height> <count>`. Angles are written with 17 digits so a save and load gives back exactly the same numbers.

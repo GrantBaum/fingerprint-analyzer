@@ -222,6 +222,28 @@ inline void status(const std::string& text) {
     if (active) active->status(text);
 }
 
+// ---- mute ----------------------------------------------------------------------
+//
+// Turns the UI off until it goes out of scope, then puts it back the way it was.
+// import and eval use it so the stages of every single print don't flood the
+// screen, while their own progress bar over all the files still shows:
+//
+//     {
+//         ui::Mute quiet;
+//         analyzePrint(path, outDir);   // prints nothing
+//     }
+//     s.progress(i + 1, total);         // UI is back on here
+
+class Mute {
+public:
+    Mute() : was_(enabled) { enabled = false; }
+    ~Mute() { enabled = was_; }
+    Mute(const Mute&) = delete;
+    Mute& operator=(const Mute&) = delete;
+private:
+    bool was_;
+};
+
 // ---- questions and answers ---------------------------------------------------
 //
 // These print even when the UI is off, because they're the actual results

@@ -1,6 +1,10 @@
 //nessecary libs for ts
+#include <algorithm>
+#include <cctype>
 #include <filesystem>
+#include <fstream>
 #include <iostream>
+#include <map>
 #include <string>
 #include <vector>
 #include "fingerprint.hpp"
@@ -19,13 +23,13 @@ std::string outDirFor(const std::string& path) {
 // analyzePrint: runs the whole pipeline on one image, saves every debug image
 // in outDir and returns the print's template.
 Template analyzePrint(const std::string& path, const std::string& outDir) {
-    std::filesystem::create_directories(outDir);
 
     // ---- Load ----------------------------------------------------------
     GrayImage img;
     {
         ui::Stage s("Loading");
         img = loadGray(path);
+        std::filesystem::create_directories(outDir); //only once we know the image is good
         saveGray(img, outDir + "00_raw.png");
         s.done(std::to_string(img.width) + " x " + std::to_string(img.height) +
                "  " + std::filesystem::path(path).filename().string());
@@ -252,19 +256,228 @@ std::string runMenu(const std::string& path, const std::string& outDir, const Te
     }
 }
 
+// listImages: every .tif, .png, .bmp and .jpg in a folder, sorted by name.
+std::vector<std::string> listImages(const std::string& folder) {
+    if(!std::filesystem::is_directory(folder)){
+        throw std::runtime_error("listImages: " + folder + " is not a folder");
+    }
+
+    std::vector<std::string> images;
+    for(const auto& file : std::filesystem::directory_iterator(folder)){
+        if(!file.is_regular_file()) continue;
+
+        //lowercase the extension so .TIF counts too
+        std::string ext = file.path().extension().string();
+        for(char& c : ext) c = std::tolower(static_cast<unsigned char>(c));
+        if(ext == ".tif" || ext == ".png" || ext == ".bmp" || ext == ".jpg"){
+            images.push_back(file.path().string());
+        }
+    }
+    std::sort(images.begin(), images.end());
+    return images;
+}
+
+// runImport: analyzes and catalogues every image in a folder. The name comes
+// from the file name and the finger is "unknown".
+std::string runImport(const std::string& folder) {
+    std::vector<std::string> images = listImages(folder);
+    if(images.empty()){
+        throw std::runtime_error("runImport: no .tif, .png, .bmp or .jpg files in " + folder);
+    }
+
+    std::vector<std::string> failed;   // "file: reason" for each one that broke
+    std::string firstId, lastId;
+    {
+        ui::Stage s("Importing");
+        for(size_t i = 0; i < images.size(); i++){
+            std::string name = std::filesystem::path(images[i]).stem().string();
+            try {
+                ui::Mute quiet; //hide this print's own stages
+                std::string outDir = outDirFor(images[i]);
+                analyzePrint(images[i], outDir);
+                lastId = catalogue(images[i], outDir, name, "unknown");
+                if(firstId.empty()) firstId = lastId;
+            } catch (const std::exception& e) {
+                failed.push_back(name + ": " + e.what()); //keep going, one bad print shouldn't stop the rest
+            }
+            s.progress(i + 1, images.size());
+        }
+        s.done(std::to_string(images.size() - failed.size()) + " of " + std::to_string(images.size()) + " catalogued");
+    }
+
+    for(const std::string& f : failed) ui::warn(f);
+    if(firstId.empty()) return "Nothing was imported";
+    return "Imported as IDs " + firstId + " to " + lastId;
+}
+
+// runEval: the FVC test on an FVC "B" set, where files are named
+// <finger>_<impression>, like 101_1.tif.
+//   genuine pairs:  every impression of a finger against every other impression
+//                   of the same finger (each pair once)
+//   impostor pairs: the first impression of every finger against the first
+//                   impression of every other finger (each pair once)
+// Writes every score to out/eval/scores.csv and prints FMR, FNMR and EER.
+std::string runEval(const std::string& folder) {
+    ui::minStageMs = 0; //hundreds of steps, no time for pauses
+
+    //group the files by finger, using the part of the name before the _
+    std::vector<std::string> images = listImages(folder);
+    std::map<std::string, std::vector<std::string>> fingers; // finger -> its impressions, in order
+    for(const std::string& path : images){
+        std::string stem = std::filesystem::path(path).stem().string();
+        size_t underscore = stem.find('_');
+        if(underscore == std::string::npos) continue; //not an FVC name, skip it
+        fingers[stem.substr(0, underscore)].push_back(path);
+    }
+    if(fingers.size() < 2){
+        throw std::runtime_error("runEval: need at least 2 fingers named like 101_1.tif in " + folder);
+    }
+
+    //analyze every print once, its debug images go in out/eval/<name>/
+    std::map<std::string, Template> templates; // path -> template
+    {
+        ui::Stage s("Analyzing");
+        int done = 0;
+        for(const std::string& path : images){
+            {
+                ui::Mute quiet;
+                std::string name = std::filesystem::path(path).stem().string();
+                templates[path] = analyzePrint(path, "out/eval/" + name + "/");
+            }
+            done++;
+            s.progress(done, images.size());
+        }
+        s.done(std::to_string(images.size()) + " prints  " + std::to_string(fingers.size()) + " fingers");
+    }
+
+    //build the list of pairs to compare
+    struct Pair {
+        std::string a;
+        std::string b;
+        bool genuine;
+    };
+    std::vector<Pair> pairs;
+    for(const auto& [finger, prints] : fingers){
+        for(size_t i = 0; i < prints.size(); i++){
+            for(size_t j = i + 1; j < prints.size(); j++){
+                pairs.push_back({prints[i], prints[j], true}); //same finger
+            }
+        }
+    }
+    for(auto f1 = fingers.begin(); f1 != fingers.end(); f1++){
+        for(auto f2 = std::next(f1); f2 != fingers.end(); f2++){
+            pairs.push_back({f1->second[0], f2->second[0], false}); //first of one finger vs first of another
+        }
+    }
+
+    //score every pair and write them all to scores.csv
+    std::vector<double> genuine;
+    std::vector<double> impostor;
+    std::filesystem::create_directories("out/eval");
+    std::ofstream csv("out/eval/scores.csv");
+    csv << "a,b,genuine,score\n";
+    {
+        ui::Stage s("Matching");
+        for(size_t i = 0; i < pairs.size(); i++){
+            const Pair& p = pairs[i];
+            double score = matchTemplates(templates[p.a], templates[p.b]).score;
+            if(p.genuine){
+                genuine.push_back(score);
+            }
+            else{
+                impostor.push_back(score);
+            }
+            csv << std::filesystem::path(p.a).stem().string() << "," << std::filesystem::path(p.b).stem().string()
+                << "," << (p.genuine ? "yes" : "no") << "," << score << "\n";
+            s.progress(i + 1, pairs.size());
+        }
+        s.done(std::to_string(genuine.size()) + " genuine  " + std::to_string(impostor.size()) + " impostor");
+    }
+
+    //FMR(t) = share of impostor pairs scoring at or above t (wrongly accepted)
+    //FNMR(t) = share of genuine pairs scoring below t (wrongly rejected)
+    auto fmr = [&](double t) {
+        int count = 0;
+        for(double v : impostor) if(v >= t) count++;
+        return (double)count / impostor.size();
+    };
+    auto fnmr = [&](double t) {
+        int count = 0;
+        for(double v : genuine) if(v < t) count++;
+        return (double)count / genuine.size();
+    };
+
+    //EER: raising t lowers FMR and raises FNMR. try every score that showed up
+    //as the threshold and keep the one where the two rates are closest. the EER
+    //is the average of the two rates there
+    double eer = 1;
+    double eerThreshold = 0;
+    double bestGap = 2;
+    std::vector<double> all = genuine;
+    all.insert(all.end(), impostor.begin(), impostor.end());
+    all.push_back(1.0001); //a threshold above every score, so "accept nothing" is tried too
+    for(double t : all){
+        double gap = std::fabs(fmr(t) - fnmr(t));
+        if(gap < bestGap){
+            bestGap = gap;
+            eer = (fmr(t) + fnmr(t)) / 2;
+            eerThreshold = t;
+        }
+    }
+
+    //averages, to see how far apart the two piles are
+    double gMean = 0, iMean = 0;
+    for(double v : genuine) gMean += v;
+    for(double v : impostor) iMean += v;
+    gMean /= genuine.size();
+    iMean /= impostor.size();
+
+    std::cout << "\n";
+    ui::line("genuine   " + std::to_string(genuine.size()) + " pairs   mean score " + ui::fixed(gMean, 3));
+    ui::line("impostor  " + std::to_string(impostor.size()) + " pairs   mean score " + ui::fixed(iMean, 3));
+    ui::line("at MATCH_THRESHOLD " + ui::fixed(MATCH_THRESHOLD, 3) + ":  FMR " + ui::fixed(100 * fmr(MATCH_THRESHOLD), 1) +
+             "%   FNMR " + ui::fixed(100 * fnmr(MATCH_THRESHOLD), 1) + "%");
+    ui::line(ui::paint(ui::BOLD, "EER " + ui::fixed(100 * eer, 2) + "%") + "  at threshold " + ui::fixed(eerThreshold, 3) +
+             "  (FMR " + ui::fixed(100 * fmr(eerThreshold), 1) + "%  FNMR " + ui::fixed(100 * fnmr(eerThreshold), 1) + "%)");
+    return "Scores written to out/eval/scores.csv";
+}
+
+// printUsage: the list of commands.
+void printUsage(const char* program) {
+    std::cerr << "usage:\n"
+              << "  " << program << " <image>            analyze one print, then show the menu\n"
+              << "  " << program << " import <folder>    analyze and catalogue every image in a folder\n"
+              << "  " << program << " eval <folder>      run the FVC test on an FVC B set\n";
+}
+
 int main(int argc, char** argv) {
     if (argc < 2) {
-        std::cerr << "usage: " << argv[0] << " <image>" << std::endl;
+        printUsage(argv[0]);
         return 1;
     }
-    std::string path = argv[1];
-    std::string outDir = outDirFor(path);
-    ui::banner();
+    std::string command = argv[1];
 
+    //import and eval need a folder after them
+    if ((command == "import" || command == "eval") && argc < 3) {
+        printUsage(argv[0]);
+        return 1;
+    }
+
+    ui::banner();
     try {
-        Template t = analyzePrint(path, outDir);
-        ui::success("Analysis complete. Results waiting in " + outDir);
-        ui::finalScreen(true, runMenu(path, outDir, t));
+        if (command == "import") {
+            ui::finalScreen(true, runImport(argv[2]));
+        }
+        else if (command == "eval") {
+            ui::finalScreen(true, runEval(argv[2]));
+        }
+        else {
+            std::string path = command;   //no command word, so it's an image
+            std::string outDir = outDirFor(path);
+            Template t = analyzePrint(path, outDir);
+            ui::success("Analysis complete. Results waiting in " + outDir);
+            ui::finalScreen(true, runMenu(path, outDir, t));
+        }
     } catch (const std::exception& e) {
         ui::finalScreen(false, e.what());
         return 1;

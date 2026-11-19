@@ -36,7 +36,7 @@ const double MATCH_ANGLE_DEG = 20;
 const int MIN_MINUTIAE = 5;
 
 // Scores at or above this are called a MATCH. Set from the EER of "fpmatch eval".
-extern const double MATCH_THRESHOLD = 0.10;
+extern const double MATCH_THRESHOLD = 0.030;
 
 // =============================================================================
 

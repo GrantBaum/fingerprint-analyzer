@@ -223,9 +223,10 @@ void runCompare(const std::string& path, const Template& t) {
                "rotation " + ui::fixed(result.alignment.rotation * 180 / PI, 1) + " deg");
     }
 
+    ui::scan("Comparing");
     ui::verdict(result.score >= MATCH_THRESHOLD,
-                "score " + ui::fixed(result.score, 3) + "  (threshold " + ui::fixed(MATCH_THRESHOLD, 3) + ")");
-    ui::info("overlay saved to " + pairDir + "aligned.png");
+                "score " + ui::fixed(result.score, 3) + "   " + std::to_string(result.matched) + " points line up");
+    ui::info("threshold " + ui::fixed(MATCH_THRESHOLD, 3) + "   overlay saved to " + pairDir + "aligned.png");
 }
 
 // runSearch: scores this print against the whole database and shows the top 5.
@@ -242,22 +243,34 @@ void runSearch(const Template& t) {
         return;
     }
 
-    //one row per hit, the paths are there so the examiner can open them
-    const int widths[7] = {4, 4, 16, 14, 6, 16, 16};
-    const std::string header[7] = {"#", "ID", "Name", "Finger", "Score", "Raw", "Skeleton"};
-    std::cout << "\n";
-    ui::tableRow(header, widths, 7, true);
+    //one row per hit, the paths are there so the examiner can open them.
+    //the bar shows each score next to the threshold: a full bar is twice the
+    //threshold, so a half full bar is right on the line
+    ui::scan("Ranking");
+    ui::header("CANDIDATE LIST");
+    const int widths[8] = {3, 4, 14, 12, 6, 10, 16, 16};
+    const std::string header[8] = {"#", "ID", "Name", "Finger", "Score", "", "Raw", "Skeleton"};
+    ui::tableRow(header, widths, 8, true);
     for(size_t i = 0; i < hits.size(); i++){
         const SearchHit& h = hits[i];
         std::string score = ui::fixed(h.result.score, 3);
         if(h.result.score >= MATCH_THRESHOLD) score += "*"; //above the match threshold
-        const std::string row[7] = {std::to_string(i + 1), h.entry.id, h.entry.name, h.entry.finger,
-                                    score, h.entry.raw, h.entry.skeleton};
-        ui::tableRow(row, widths, 7);
+        const std::string row[8] = {std::to_string(i + 1), h.entry.id, h.entry.name, h.entry.finger,
+                                    score, "", h.entry.raw, h.entry.skeleton};
+        //print the row with the bar spliced into the empty column
+        std::string before, after;
+        for(int c = 0; c < 5; c++) before += ui::pad(row[c], widths[c]) + "  ";
+        for(int c = 6; c < 8; c++) after += ui::pad(row[c], widths[c]) + "  ";
+        std::cout << "  ";
+        ui::typeOut(before, 4);
+        std::cout << ui::scoreBar(h.result.score, 2 * MATCH_THRESHOLD, widths[5]) << "  ";
+        ui::typeOut(after, 4);
+        std::cout << "\n";
     }
     std::cout << "\n";
     ui::info("* = at or above the match threshold (" + ui::fixed(MATCH_THRESHOLD, 3) + ")");
-    ui::info("these are suggestions. compare the prints by eye before deciding anything");
+    ui::warn("THE SOFTWARE SUGGESTS. THE EXAMINER DECIDES.");
+    ui::info("open the raw and skeleton files and compare them by eye");
 }
 
 // runMenu: the menu shown after analyzing a print. Results wait in outDir until
@@ -272,7 +285,7 @@ std::string runMenu(const std::string& path, const std::string& outDir, const Te
     };
 
     while(true){
-        char choice = ui::menu("What next?", "abcdq", labels);
+        char choice = ui::menu("CASE OPTIONS", "abcdq", labels);
 
         if(choice == 'a'){
             std::string name, finger;
@@ -479,13 +492,29 @@ std::string runEval(const std::string& folder) {
     gMean /= genuine.size();
     iMean /= impostor.size();
 
-    std::cout << "\n";
-    ui::line("genuine   " + std::to_string(genuine.size()) + " pairs   mean score " + ui::fixed(gMean, 3));
-    ui::line("impostor  " + std::to_string(impostor.size()) + " pairs   mean score " + ui::fixed(iMean, 3));
-    ui::line("at MATCH_THRESHOLD " + ui::fixed(MATCH_THRESHOLD, 3) + ":  FMR " + ui::fixed(100 * fmr(MATCH_THRESHOLD), 1) +
-             "%   FNMR " + ui::fixed(100 * fnmr(MATCH_THRESHOLD), 1) + "%");
-    ui::line(ui::paint(ui::BOLD, "EER " + ui::fixed(100 * eer, 2) + "%") + "  at threshold " + ui::fixed(eerThreshold, 3) +
-             "  (FMR " + ui::fixed(100 * fmr(eerThreshold), 1) + "%  FNMR " + ui::fixed(100 * fnmr(eerThreshold), 1) + "%)");
+    //the report. a box on screen, plain lines when piped to a file
+    std::string mode = "enhancement on";
+    if (!useEnhance) mode = "enhancement off (--no-enhance)";
+    const std::string report[7] = {
+        "set        " + folder + "   " + mode,
+        "genuine    " + std::to_string(genuine.size()) + " pairs   mean score " + ui::fixed(gMean, 3),
+        "impostor   " + std::to_string(impostor.size()) + " pairs   mean score " + ui::fixed(iMean, 3),
+        "",
+        "set threshold " + ui::fixed(MATCH_THRESHOLD, 4) + "   FMR " + ui::fixed(100 * fmr(MATCH_THRESHOLD), 1) +
+            "%   FNMR " + ui::fixed(100 * fnmr(MATCH_THRESHOLD), 1) + "%",
+        "EER point     " + ui::fixed(eerThreshold, 4) + "   FMR " + ui::fixed(100 * fmr(eerThreshold), 1) +
+            "%   FNMR " + ui::fixed(100 * fnmr(eerThreshold), 1) + "%",
+        ui::paint(ui::BOLD, "EER " + ui::fixed(100 * eer, 2) + "%") + "   (lower is better)"
+    };
+    if (ui::enabled) {
+        ui::scan("Tallying");
+        ui::box("EVALUATION REPORT", report, 7);
+    }
+    else {
+        for (const std::string& r : report) {
+            if (!r.empty()) ui::line(r);
+        }
+    }
     return "Scores written to out/eval/scores.csv";
 }
 

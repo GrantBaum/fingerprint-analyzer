@@ -6,7 +6,7 @@
 // Everything lives in namespace ui, so call things like ui::banner().
 //
 // It turns itself off when output isn't a terminal (piped to a file), and
-// you can force it off with ui::enabled = false (fpeval will want that).
+// you can force it off with ui::enabled = false or for a while with ui::Mute.
 
 #include <algorithm>
 #include <atomic>
@@ -95,7 +95,7 @@ inline void banner() {
     typeOut(block + " FPMATCH " + block);
     std::cout << RESET << BOLD;
     typeOut("  FORENSIC PRINT ANALYSIS");
-    std::cout << RESET << DIM << "  v0.1" << RESET << "\n";
+    std::cout << RESET << DIM << "  v1.0" << RESET << "\n";
     std::cout << " " << DIM << repeat(rule, 47) << RESET << "\n";
 }
 
@@ -264,14 +264,23 @@ inline std::string ask(const std::string& question) {
     return answer;
 }
 
+// Section header like " ── CANDIDATE LIST ─────────", typed out like the banner.
+inline void header(const std::string& title) {
+    std::string rule = unicode ? "─" : "-";
+    std::cout << "\n " << (enabled ? DIM : "") << repeat(rule, 2) << (enabled ? RESET : "") << " ";
+    if (enabled) std::cout << BOLD << CYAN;
+    typeOut(title);
+    if (enabled) std::cout << RESET << DIM;
+    int fill = 47 - 4 - static_cast<int>(title.size());
+    std::cout << " " << repeat(rule, fill > 0 ? fill : 0) << (enabled ? RESET : "") << "\n";
+}
+
 // Shows a list of choices like " [a] Catalogue this print" and returns the
 // letter picked. Keeps asking until it gets a letter from the list. Returns
 // 'q' if input runs out, so a closed pipe can't loop forever.
 inline char menu(const std::string& title, const std::string& letters,
                  const std::string* labels) {
-    std::string rule = unicode ? "─" : "-";
-    std::cout << "\n " << paint(DIM, repeat(rule, 47)) << "\n";
-    std::cout << " " << paint(BOLD, title) << "\n";
+    header(title);
     for (size_t i = 0; i < letters.size(); i++) {
         std::cout << "  " << paint(CYAN, std::string("[") + letters[i] + "]") << " " << labels[i] << "\n";
     }
@@ -286,19 +295,96 @@ inline char menu(const std::string& title, const std::string& letters,
     }
 }
 
-// A big MATCH or NO MATCH line with the score after it.
+// A fake "scanning" bar that fills up over ms milliseconds, for suspense
+// before a result is shown. The work is already done, this is pure drama.
+inline void scan(const std::string& label, int ms = 700) {
+    if (!enabled) return;
+    const int width = 24;
+    std::string on  = unicode ? "▓" : "#";
+    std::string off = unicode ? "░" : "-";
+    for (int i = 0; i <= width; i++) {
+        std::cout << CLEAR_LINE << " " << CYAN << "[*]" << RESET << " " << pad(label, nameWidth)
+                  << "[" << CYAN << repeat(on, i) << DIM << repeat(off, width - i) << RESET << "]" << std::flush;
+        std::this_thread::sleep_for(std::chrono::milliseconds(ms / width));
+    }
+    std::cout << CLEAR_LINE << std::flush;
+}
+
+// A boxed MATCH or NO MATCH with the score, like:
+//   ┌─────────────────────────────────────────────┐
+//   │  MATCH   score 0.174   15 points line up    │
+//   └─────────────────────────────────────────────┘
 inline void verdict(bool match, const std::string& text) {
-    if (match) std::cout << "\n " << paint(GREEN, BOLD + std::string(" MATCH ")) << "     " << text << "\n";
-    else       std::cout << "\n " << paint(RED, BOLD + std::string(" NO MATCH ")) << "  " << text << "\n";
+    if (!enabled) {
+        std::cout << (match ? "MATCH  " : "NO MATCH  ") << text << "\n";
+        return;
+    }
+    const char* color = match ? GREEN : RED;
+    std::string badge = match ? " MATCH " : " NO MATCH ";
+    int inner = 45;
+    std::string h  = unicode ? "─" : "-";
+    std::string v  = unicode ? "│" : "|";
+    std::string tl = unicode ? "┌" : "+";
+    std::string tr = unicode ? "┐" : "+";
+    std::string bl = unicode ? "└" : "+";
+    std::string br = unicode ? "┘" : "+";
+
+    int used = 2 + static_cast<int>(badge.size()) + 3 + static_cast<int>(text.size());
+    std::cout << "\n " << color << tl << repeat(h, inner) << tr << RESET << "\n";
+    std::cout << " " << color << v << RESET << "  " << BOLD << "\033[7m" << color << badge << RESET << "   ";
+    typeOut(text);
+    std::cout << std::string(used < inner ? inner - used : 0, ' ') << color << v << RESET << "\n";
+    std::cout << " " << color << bl << repeat(h, inner) << br << RESET << "\n";
+}
+
+// A little bar for a score from 0 to max, like "████▌░░░░░".
+inline std::string scoreBar(double score, double max, int width = 10) {
+    if (max <= 0) max = 1;
+    int filled = static_cast<int>(std::lround(std::min(score / max, 1.0) * width));
+    std::string on  = unicode ? "█" : "#";
+    std::string off = unicode ? "░" : "-";
+    if (!enabled) return repeat(on, filled) + repeat(off, width - filled);
+    return std::string(CYAN) + repeat(on, filled) + DIM + repeat(off, width - filled) + RESET;
 }
 
 // One row of a table. Each cell is padded to its width so columns line up.
-// Pass header = true for the title row, which prints bold.
-inline void tableRow(const std::string* cells, const int* widths, int count, bool header = false) {
+// Pass header = true for the title row, which prints bold. With typed = true
+// the row comes out one character at a time.
+inline void tableRow(const std::string* cells, const int* widths, int count,
+                     bool header = false, bool typed = false) {
     std::string line;
     for (int i = 0; i < count; i++) line += pad(cells[i], widths[i]) + "  ";
-    if (header) std::cout << "  " << paint(BOLD, line) << "\n";
-    else        std::cout << "  " << line << "\n";
+    std::cout << "  ";
+    if (header) std::cout << paint(BOLD, line);
+    else if (typed) typeOut(line, 4);
+    else std::cout << line;
+    std::cout << "\n";
+}
+
+// A box around a few lines of text, for reports. Lines may hold color codes,
+// so the visible width is worked out without them.
+inline void box(const std::string& title, const std::string* lines, int count) {
+    std::string h  = unicode ? "─" : "-";
+    std::string v  = unicode ? "│" : "|";
+    int inner = 47;
+
+    //visible length: skip escape codes and count multi-byte characters once
+    auto visible = [](const std::string& t) {
+        int n = 0;
+        for (size_t i = 0; i < t.size(); i++) {
+            if (t[i] == '\033') { while (i < t.size() && t[i] != 'm') i++; continue; }
+            if ((static_cast<unsigned char>(t[i]) & 0xC0) != 0x80) n++;
+        }
+        return n;
+    };
+
+    std::cout << "\n " << paint(CYAN, (unicode ? "┌" : "+") + repeat(h, 2) + " ") << paint(BOLD, title) << " "
+              << paint(CYAN, repeat(h, inner - 4 - static_cast<int>(title.size())) + (unicode ? "┐" : "+")) << "\n";
+    for (int i = 0; i < count; i++) {
+        int gap = inner - 2 - visible(lines[i]);
+        std::cout << " " << paint(CYAN, v) << "  " << lines[i] << std::string(gap > 0 ? gap : 0, ' ') << paint(CYAN, v) << "\n";
+    }
+    std::cout << " " << paint(CYAN, (unicode ? "└" : "+") + repeat(h, inner) + (unicode ? "┘" : "+")) << "\n";
 }
 
 // A plain line of text that always prints, for results like the EER.

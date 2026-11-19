@@ -139,12 +139,16 @@ Template analyzePrint(const std::string& path, const std::string& outDir) {
         minutiae = findMinutiae(bin);
         saveMinutiae(bin, minutiae, outDir + "08_minutiae.png");
 
-        int endings = 0;
+        int endings = 0, forks = 0, dots = 0, crossings = 0;
         for (const Minutia& m : minutiae) {
             if (m.type == ENDING) endings++;
+            if (m.type == BIFURCATION) forks++;
+            if (m.type == DOT) dots++;
+            if (m.type == CROSSOVER) crossings++;
         }
-        s.done(std::to_string(minutiae.size()) + " found  " + std::to_string(endings) +
-               " endings  " + std::to_string(minutiae.size() - endings) + " bifurcations");
+        s.done(std::to_string(minutiae.size()) + " found  " + std::to_string(endings) + " endings  " +
+               std::to_string(forks) + " bifurcations");
+        ui::info("dots " + std::to_string(dots) + "  crossings " + std::to_string(crossings));
     }
 
     // ---- Filter --------------------------------------------------------
@@ -157,7 +161,25 @@ Template analyzePrint(const std::string& path, const std::string& outDir) {
         s.done(std::to_string(before) + " -> " + std::to_string(minutiae.size()) + " minutiae");
         ui::info("border " + std::to_string(report.border) + "  spurs " + std::to_string(report.spurs) +
                  "  islands " + std::to_string(report.islands) + "  broken " + std::to_string(report.broken) +
-                 "  close " + std::to_string(report.close));
+                 "  close " + std::to_string(report.close) + "  kept as dots " + std::to_string(report.dots));
+    }
+
+    // ---- Shapes --------------------------------------------------------
+    {
+        ui::Stage s("Shapes");
+        std::vector<Minutia> shapes = findShapes(minutiae, bin);
+        int shortRidges = 0, spurs = 0, lakes = 0, crossovers = 0;
+        for (const Minutia& m : shapes) {
+            if (m.type == SHORT_RIDGE) shortRidges++;
+            if (m.type == SPUR) spurs++;
+            if (m.type == LAKE) lakes++;
+            if (m.type == CROSSOVER) crossovers++;
+        }
+        minutiae.insert(minutiae.end(), shapes.begin(), shapes.end());
+        saveMinutiae(bin, minutiae, outDir + "10_shapes.png");
+        s.done(std::to_string(shapes.size()) + " found  " + std::to_string(shortRidges) + " short ridges  " +
+               std::to_string(spurs) + " spurs");
+        ui::info("lakes " + std::to_string(lakes) + "  crossovers " + std::to_string(crossovers));
     }
 
     // ---- Template ------------------------------------------------------

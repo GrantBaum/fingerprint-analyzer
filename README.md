@@ -1,6 +1,6 @@
 # fpmatch
 
-A rule-based fingerprint matcher written in C++. It finds the ridge endings and bifurcations in a print, lines two prints up and scores how many points agree. It can keep a small local database of prints and search it. There's no machine learning and nothing leaves your computer. It uses classic image processing, signal processing and geometry only.
+A rule-based fingerprint matcher written in C++. It finds the minutiae in a print (ridge endings, bifurcations and five other ridge shapes), lines two prints up and scores how many points agree. It can keep a small local database of prints and search it. There's no machine learning and nothing leaves your computer. It uses classic image processing, signal processing and geometry only.
 
 **Status:** done. EER on FVC2002 DB1_B is **13.45%** (24.0% without enhancement). See `docs/briefing.md` for how every part works.
 
@@ -26,7 +26,7 @@ Put test prints in `data/` (see References). They aren't committed to the repo. 
 | `fpmatch import <folder>` | Analyzes and catalogues every `.tif`, `.png`, `.bmp` and `.jpg` in a folder. Names come from the file names |
 | `fpmatch eval <folder>` | Runs the FVC test on an FVC "B" set, writes `out/eval/scores.csv` and prints FMR, FNMR and EER |
 
-Add `--no-enhance` to any command to skip the orientation, frequency and Gabor stages. That's only for experiments. Templates made that way are marked `1-plain` in the database.
+Add `--no-enhance` to any command to skip the orientation, frequency and Gabor stages. That's only for experiments. Templates made that way are marked `2-plain` in the database.
 
 ### The case menu
 
@@ -57,7 +57,7 @@ flowchart TB
     end
     subgraph X["2. Extract"]
         direction LR
-        B["Binarize<br/>ridge or valley"] --> T["Thin<br/>1 px skeleton"] --> M["Minutiae<br/>find points"] --> FL["Filter<br/>drop fakes"] --> TP["Template<br/>points list"]
+        B["Binarize<br/>ridge or valley"] --> T["Thin<br/>1 px skeleton"] --> M["Minutiae<br/>find points"] --> FL["Filter<br/>drop fakes"] --> SH["Shapes<br/>lakes, spurs ..."] --> TP["Template<br/>points list"]
     end
     subgraph MA["3. Match"]
         direction LR
@@ -81,7 +81,7 @@ fingerprint-analysis/
 │   ├── fingerprint.hpp        shared structs and every function declaration
 │   ├── image_processing.cpp   load, normalize, mask, binarize, thin
 │   ├── enhance.cpp            orientation field, ridge frequency, Gabor filter
-│   ├── minutiae.cpp           find minutiae, filter fakes, save and load templates
+│   ├── minutiae.cpp           find minutiae and shapes, filter fakes, save and load templates
 │   ├── matching.cpp           Hough alignment, pairing, score (all tuning numbers at the top)
 │   ├── database.cpp           index.csv, catalogue, search, discard
 │   └── main.cpp               command line, case menu, pipeline, eval
@@ -108,26 +108,44 @@ Every stage saves a picture in `out/<print name>/`, numbered in pipeline order.
 | `05_enhanced.png` | Gabor |
 | `06_binary.png` | binarize |
 | `07_skeleton.png` | thin |
-| `08_minutiae.png` | minutiae (red = ending, blue = bifurcation) |
+| `08_minutiae.png` | minutiae (colors in the table below) |
 | `09_filtered.png` | filter |
+| `10_shapes.png` | shapes, drawn with thick circles on top of the filtered minutiae |
 | `template.tmpl` | the template that gets matched |
 | `aligned.png` | compare, in `out/<a>_vs_<b>/` (blue = B, red = A moved onto B, green = paired) |
 
+## Minutia types
+
+| Type | What it is | Color |
+| --- | --- | --- |
+| ending | a ridge stops | red |
+| bifurcation | a ridge splits in two | blue |
+| dot | a ridge so short it's just a spot, alone in a valley | magenta, filled |
+| short ridge | a short piece of ridge on its own (an island), 16 to 40 px | green |
+| spur | a short branch off a ridge (a hook), 13 to 25 px | teal |
+| lake | a ridge splits and joins back up (an enclosure) | purple |
+| crossover | a short ridge joining two ridges, or two ridges crossing | orange |
+
+Endings, bifurcations, dots and true crossings are found one pixel at a time with the crossing number. Short ridges, spurs, lakes and bridge-style crossovers are made of two endings or bifurcations joined by a short ridge, so they are found afterwards by walking the skeleton between them. The parts stay in the template too.
+
+Only endings and bifurcations are used for matching. Using the other shapes made the EER worse (13.5% to 15.3%), because they rarely come out the same way in two impressions. They are saved for the examiner to look at. `USE_SHAPES` in `matching.cpp` turns them on.
+
 ## Data formats
 
-**Minutia angles.** Radians from 0 to 2π, like on a math graph: 0 points right and π/2 points up on screen. Image y points down, so every `atan2` flips dy. An ending points out of the ridge tip. A bifurcation points away from its single trunk ridge.
+**Minutia angles.** Radians from 0 to 2π, like on a math graph: 0 points right and π/2 points up on screen. Image y points down, so every `atan2` flips dy. An ending points out of the ridge tip. A bifurcation points away from its single trunk ridge. A spur points from its root out along the branch. Short ridges, lakes and crossovers look the same from both ends, so their angle is a line from 0 to π. A dot has no direction and its angle is always 0.
 
 **Template (`.tmpl`).** Plain text. A header line, then one minutia per line.
 
 ```
-fpmatch-template 1 388 374 23
+fpmatch-template 2 388 374 24
 211 39 5.7838385854994563 ending
 192 49 2.7610862764774282 ending
-176 81 2.7233683240105648 bifurcation
+148 61 2.961739153797315 ending
 ...
+164 208 3.7703889400052257 spur
 ```
 
-The header is `fpmatch-template <version> <width> <height> <count>`. Angles are written with 17 digits so a save and load gives back exactly the same numbers.
+The header is `fpmatch-template <version> <width> <height> <count>`. The type is one of `ending`, `bifurcation`, `dot`, `short_ridge`, `spur`, `lake` or `crossover`. Version 1 templates only have endings and bifurcations and still load. Angles are written with 17 digits so a save and load gives back exactly the same numbers.
 
 **Index (`db/index.csv`).** `id,name,finger,raw,skeleton,template,added,version`. `added` is `YYYY-MM-DD HH:MM`. `version` is the pipeline version, so old templates can be found and re-analyzed if the pipeline changes. Names and fingers can't contain commas.
 
@@ -169,10 +187,14 @@ Values from Hong et al. (1998) are tested for 500 dpi prints. The rest were tune
 | Spur length, island length | minutiae.cpp | 12 px, 15 px |
 | Broken ridge gap and angle | minutiae.cpp | 15 px, 45° |
 | Min distance between minutiae | minutiae.cpp | 6 px |
+| Dot length, space around a dot | minutiae.cpp | 6 px, 3 px |
+| Longest short ridge, spur, lake side | minutiae.cpp | 40 px, 25 px, 40 px |
+| Longest crossover, angle across the ridges | minutiae.cpp | 20 px, 45° |
 | Hough bins | matching.cpp | 5°, 8 px |
 | Max rotation, max shift | matching.cpp | 60°, 300 px |
 | Hough peaks tried | matching.cpp | 5 |
 | Same-type voting | matching.cpp | on |
+| Use shapes for matching | matching.cpp | off |
 | Match distance, match angle | matching.cpp | 12 px, 20° |
 | Match threshold | matching.cpp | 0.028 |
 

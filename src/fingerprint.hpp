@@ -11,7 +11,7 @@
 
 // bump this whenever the pipeline changes, so old templates in db/ can be
 // found and re-analyzed later
-constexpr const char* PIPELINE_VERSION = "1";
+constexpr const char* PIPELINE_VERSION = "2";
 
 constexpr double PI = 3.14159265358979323846;
 
@@ -68,15 +68,27 @@ void applyMask(BinaryImage& img, const BinaryImage& mask);
 
 // ---- minutiae.cpp -------------------------------------------------------------
 
-// the type numbers match the crossing number that finds them
-enum MinutiaType { ENDING = 1, BIFURCATION = 3 };
+// the first four numbers match the crossing number that finds them on one pixel.
+// the rest are shapes made of two endings or bifurcations close together
+enum MinutiaType {
+    DOT = 0,            // a ridge so short it's just a spot
+    ENDING = 1,         // a ridge stops
+    BIFURCATION = 3,    // a ridge splits in two
+    CROSSOVER = 4,      // a short ridge joins two ridges, or two ridges cross
+    SHORT_RIDGE = 10,   // a short piece of ridge on its own (an island)
+    SPUR = 11,          // a short branch off a ridge (a hook)
+    LAKE = 12           // a ridge splits and joins back up (an enclosure)
+};
 
-// Minutia: one ridge ending or bifurcation.
+// Minutia: one ridge ending, bifurcation or other ridge shape.
 // Angle convention: radians from 0 to 2π, like on a math graph. 0 points right,
 // π/2 points UP on screen and angles grow counterclockwise. Image y points down,
 // so every atan2 in this project flips dy: atan2(-(y2 - y1), x2 - x1).
 // An ending points out of the ridge tip. A bifurcation points away from the
 // single ridge (the trunk) toward the gap between the two branches.
+// A spur points from its root out along the branch. Short ridges, lakes and
+// crossovers look the same from both ends, so their angle is only kept from 0
+// to π, along the shape. A dot has no direction and its angle is always 0.
 struct Minutia {
     int x = 0;
     int y = 0;
@@ -97,6 +109,9 @@ double wrapAngle(double a);
 double angleDiff(double a, double b);
 double angleBetween(int x1, int y1, int x2, int y2);
 double distance(const Minutia& a, const Minutia& b);
+std::string typeName(MinutiaType type);
+bool isAxis(MinutiaType type);
+double minutiaAngleDiff(const Minutia& a, const Minutia& b);
 RidgeTrace traceRidge(const BinaryImage& skel, std::vector<std::pair<int, int>> visited,
                       int x, int y, int maxSteps);
 std::vector<Minutia> findMinutiae(const BinaryImage& skel);
@@ -109,10 +124,12 @@ struct FilterReport {
     int islands = 0;
     int broken = 0;
     int close = 0;
+    int dots = 0;   // not removed: tiny islands sitting alone in a valley, kept as dots
 };
 
 std::vector<Minutia> filterMinutiae(const std::vector<Minutia>& minutiae, const BinaryImage& skel,
                                     const BinaryImage& mask, FilterReport& report);
+std::vector<Minutia> findShapes(const std::vector<Minutia>& minutiae, const BinaryImage& skel);
 
 // Template: everything we keep about one print, the minutiae plus the size of
 // the image they came from. This is what gets compared, not the picture.

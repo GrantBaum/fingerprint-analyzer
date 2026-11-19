@@ -39,6 +39,14 @@ const int HOUGH_PEAKS = 5;
 const double MATCH_DISTANCE_PX = 12;
 const double MATCH_ANGLE_DEG = 20;
 
+// Use the bigger ridge shapes (dots, short ridges, spurs, lakes, crossovers)
+// when matching, not just endings and bifurcations. A shape only pairs with
+// the same kind of shape. Off, because they made it worse: EER 13.5% -> 15.3%.
+// A small change in pressure turns a lake into two bifurcations or a short
+// ridge into a broken one, so the shapes rarely show up the same way twice.
+// They still go in the template and the pictures for the examiner to look at.
+const bool USE_SHAPES = false;
+
 // A print with fewer minutiae than this can't be matched with any confidence.
 const int MIN_MINUTIAE = 5;
 
@@ -113,10 +121,15 @@ std::vector<Alignment> alignTemplates(const Template& a, const Template& b) {
         const Minutia& ma = a.minutiae[i];
         const Minutia& mb = b.minutiae[j];
         if(SAME_TYPE_ONLY && ma.type != mb.type) return false;
+        if(ma.type == DOT || mb.type == DOT) return false; //a dot has no angle to vote with
 
         //rotation from -180 to 180 degrees
         rot = wrapAngle(mb.angle - ma.angle);
         if(rot > PI) rot -= 2 * PI;
+
+        //a line can be read either way round, so take the smaller turn
+        if(isAxis(ma.type) && rot > PI / 2) rot -= PI;
+        if(isAxis(ma.type) && rot < -PI / 2) rot += PI;
         if(std::fabs(rot) > MAX_ROTATION_DEG * DEG) return false; //too much rotation
 
         //turn A's point with no shift, then the shift is whatever is left over
@@ -254,9 +267,17 @@ MatchResult pairAndScore(const Template& a, const Template& b, const Alignment& 
     std::vector<Candidate> candidates;
     for(int i = 0; i < nA; i++){
         for(int j = 0; j < nB; j++){
-            double d = distance(moved[i], b.minutiae[j]);
-            if(d > MATCH_DISTANCE_PX) continue;                                                 //too far apart
-            if(angleDiff(moved[i].angle, b.minutiae[j].angle) > MATCH_ANGLE_DEG * DEG) continue; //pointing different ways
+            const Minutia& ma = moved[i];
+            const Minutia& mb = b.minutiae[j];
+            double d = distance(ma, mb);
+            if(d > MATCH_DISTANCE_PX) continue;                                 //too far apart
+            if(minutiaAngleDiff(ma, mb) > MATCH_ANGLE_DEG * DEG) continue;      //pointing different ways
+
+            //endings and bifurcations can pair with each other, since pressing
+            //harder turns one into the other. every other shape needs its own kind
+            bool aBasic = (ma.type == ENDING || ma.type == BIFURCATION);
+            bool bBasic = (mb.type == ENDING || mb.type == BIFURCATION);
+            if(!(aBasic && bBasic) && ma.type != mb.type) continue;
             candidates.push_back({d, i, j});
         }
     }
@@ -296,8 +317,31 @@ MatchResult pairAndScore(const Template& a, const Template& b, const Alignment& 
 
 // matchTemplates: aligns A onto B, pairs up minutiae and scores the result.
 // Tries each of the top Hough peaks and keeps the best score.
-MatchResult matchTemplates(const Template& a, const Template& b) {
+MatchResult matchTemplates(const Template& fullA, const Template& fullB) {
     MatchResult best;
+
+    //without USE_SHAPES, match on endings and bifurcations only. indexA and
+    //indexB remember where each one sat in the full template
+    Template a = fullA;
+    Template b = fullB;
+    std::vector<int> indexA, indexB;
+    a.minutiae.clear();
+    b.minutiae.clear();
+    for(size_t i = 0; i < fullA.minutiae.size(); i++){
+        const Minutia& m = fullA.minutiae[i];
+        if(USE_SHAPES || m.type == ENDING || m.type == BIFURCATION){
+            a.minutiae.push_back(m);
+            indexA.push_back(i);
+        }
+    }
+    for(size_t j = 0; j < fullB.minutiae.size(); j++){
+        const Minutia& m = fullB.minutiae[j];
+        if(USE_SHAPES || m.type == ENDING || m.type == BIFURCATION){
+            b.minutiae.push_back(m);
+            indexB.push_back(j);
+        }
+    }
+
     if((int)a.minutiae.size() < MIN_MINUTIAE || (int)b.minutiae.size() < MIN_MINUTIAE) return best; //not enough to go on, score 0
 
     std::vector<Alignment> peaks = alignTemplates(a, b);
@@ -305,6 +349,12 @@ MatchResult matchTemplates(const Template& a, const Template& b) {
     for(size_t k = 1; k < peaks.size(); k++){
         MatchResult r = pairAndScore(a, b, peaks[k]);
         if(r.score > best.score) best = r;
+    }
+
+    //point the pairs back at the full templates
+    for(auto& [i, j] : best.pairs){
+        i = indexA[i];
+        j = indexB[j];
     }
     return best;
 }
@@ -322,9 +372,15 @@ void saveAligned(const Template& a, const Template& b, const MatchResult& result
     //draws one minutia as a circle with a short angle line
     auto draw = [&](const Minutia& m, const cv::Scalar& c) {
         cv::Point center(m.x, m.y);
+        if(m.type == DOT){
+            cv::circle(img, center, 3, c, -1); //filled, a dot has no direction
+            return;
+        }
+        int radius = 4;
+        if(m.type != ENDING && m.type != BIFURCATION) radius = 7; //the bigger shapes
         cv::Point tip(m.x + (int)std::lround(10 * std::cos(m.angle)),
                       m.y - (int)std::lround(10 * std::sin(m.angle))); //minus because y points down
-        cv::circle(img, center, 4, c, 1);
+        cv::circle(img, center, radius, c, 1);
         cv::line(img, center, tip, c, 1);
     };
 

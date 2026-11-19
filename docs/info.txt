@@ -22,7 +22,8 @@ specified in the README.md documentation.
     - fingerprint.hpp has the shared structs and every function declaration
     - image_processing.cpp processes the image: load, normalize, mask, binarize, thin
     - enhance.cpp cleans up the ridges before binarize: orientation, frequency, Gabor filter
-    - minutiae.cpp finds the ridge endings and bifurcations, filters out fakes, saves and loads templates
+    - minutiae.cpp finds the minutiae (endings, bifurcations, dots, short ridges, spurs, lakes and
+      crossovers), filters out fakes, saves and loads templates
     - matching.cpp lines two templates up and scores them
     - database.cpp catalogues, searches and discards
     - main.cpp runs everything: the command line, the case menu and eval

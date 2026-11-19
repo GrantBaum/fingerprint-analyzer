@@ -486,16 +486,19 @@ std::vector<Minutia> filterMinutiae(const std::vector<Minutia>& found, const Bin
         }
     }
 
-    //check 4: anything still crowded together is noise, so drop both
+    //check 4: anything still crowded together is noise, so drop both. a dot
+    //is the least sure of all, so a dot next to anything else only drops the dot
     std::vector<bool> crowded(n, false);
     for(int i = 0; i < n; i++){
         if(!keep[i]) continue;
         for(int j = i + 1; j < n; j++){
             if(!keep[j]) continue;
-            if(distance(minutiae[i], minutiae[j]) < MIN_DISTANCE){
-                crowded[i] = true;
-                crowded[j] = true;
-            }
+            if(distance(minutiae[i], minutiae[j]) >= MIN_DISTANCE) continue;
+
+            bool dotI = (minutiae[i].type == DOT);
+            bool dotJ = (minutiae[j].type == DOT);
+            if(dotI || !dotJ) crowded[i] = true;
+            if(dotJ || !dotI) crowded[j] = true;
         }
     }
     for(int i = 0; i < n; i++){

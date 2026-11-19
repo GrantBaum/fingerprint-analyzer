@@ -15,7 +15,8 @@ OUT holds results that are waiting. After a print is analyzed, everything about 
 out/<print name>/ until it is catalogued (moved into db/) or discarded. out/eval/ holds the
 results of fpmatch eval, including scores.csv.
 
-DATA holds test prints (FVC2002 DB1_B). Not committed.
+DATA holds prints to work on. Not committed. Running fpmatch with no arguments lists everything in data/
+by number, so a print can be dragged in and picked. A folder inside data/ can be catalogued all at once.
 
 SRC holds all the code. It can be ran by compiling with the make command and then running with the proper arguments
 specified in the README.md documentation.
@@ -26,7 +27,7 @@ specified in the README.md documentation.
       crossovers), filters out fakes, saves and loads templates
     - matching.cpp lines two templates up and scores them
     - database.cpp catalogues, searches and discards
-    - main.cpp runs everything: the command line, the case menu and eval
+    - main.cpp runs everything: the command line, the start menu, the case menu, fast mode batches and eval
     - ui.hpp is for the cool and clean UI
 
 DOCS holds any additional info (like this file)

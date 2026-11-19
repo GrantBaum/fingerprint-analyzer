@@ -11,6 +11,7 @@ You need a C++17 compiler, OpenCV and pkg-config. On Ubuntu or WSL:
 ```bash
 sudo apt install build-essential libopencv-dev pkg-config
 make                            # compile only
+make start                      # opens the start menu
 make run                        # builds and runs on data/101_1.tif
 make run IMG=data/104_3.tif     # a different print
 make clean                      # deletes build/ and out/
@@ -22,11 +23,33 @@ Put test prints in `data/` (see References). They aren't committed to the repo. 
 
 | Command | What it does |
 | --- | --- |
+| `fpmatch` | Opens the start menu, which lists every print and folder in `data/` by number |
 | `fpmatch <image>` | Analyzes one print, saves its results in `out/<print name>/` and shows the case menu |
-| `fpmatch import <folder>` | Analyzes and catalogues every `.tif`, `.png`, `.bmp` and `.jpg` in a folder. Names come from the file names |
+| `fpmatch import <folder>` | Catalogues every `.tif`, `.png`, `.bmp` and `.jpg` in a folder in fast mode. Names come from the file names |
 | `fpmatch eval <folder>` | Runs the FVC test on an FVC "B" set, writes `out/eval/scores.csv` and prints FMR, FNMR and EER |
 
 Add `--no-enhance` to any command to skip the orientation, frequency and Gabor stages. That's only for experiments. Templates made that way are marked `2-plain` in the database.
+
+### The start menu
+
+Drag a print into `data/`, run `fpmatch` and pick it by number.
+
+```
+ ── EVIDENCE LOCKER ────────────────────────────
+     data/   76 prints   1 folders
+  [ 1] 101_1.tif   [20] 103_4.tif   ...
+  [77] new_case/ (6)
+  [#] Analyze a print, or catalogue a whole folder (fast mode)
+  [a] Catalogue every print in data/ (fast mode)
+  [r] Rescan data/
+  [q] Quit
+```
+
+- **A print number** runs the normal analysis and then the case menu, exactly like `fpmatch <image>`.
+- **A folder number** or **[a]** catalogues every print in it as an unknown print, after asking first. That's for adding a pile of unknown prints to the database.
+- **[r]** looks at `data/` again, after you drag new files in.
+
+**Fast mode** is what folders and `import` use. Each print still shows its stages under an EXHIBIT header, but there are no pauses or typing effects. A print that fails is skipped and the rest keep going. At the end a BATCH REPORT box shows how many were catalogued, their IDs and anything that failed, then one SUCCESS screen.
 
 ### The case menu
 
@@ -77,14 +100,14 @@ fingerprint-analysis/
 │   ├── info.txt               what each folder is for
 │   └── briefing.md            how every stage works, for learning and teaching
 ├── src/
-│   ├── ui.hpp                 terminal UI: banner, stages, menu, verdicts
+│   ├── ui.hpp                 terminal UI: banner, stages, menus, verdicts, fast mode
 │   ├── fingerprint.hpp        shared structs and every function declaration
 │   ├── image_processing.cpp   load, normalize, mask, binarize, thin
 │   ├── enhance.cpp            orientation field, ridge frequency, Gabor filter
 │   ├── minutiae.cpp           find minutiae and shapes, filter fakes, save and load templates
 │   ├── matching.cpp           Hough alignment, pairing, score (all tuning numbers at the top)
 │   ├── database.cpp           index.csv, catalogue, search, discard
-│   └── main.cpp               command line, case menu, pipeline, eval
+│   └── main.cpp               command line, start menu, case menu, batch, pipeline, eval
 ├── data/                      test prints (not committed)
 ├── out/                       results waiting to be catalogued (not committed)
 └── db/                        the print database (contents not committed)

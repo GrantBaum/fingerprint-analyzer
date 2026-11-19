@@ -193,6 +193,8 @@ A test turned 101_1 by 30° and shifted it by (10, -5). The aligner found 29.2°
 
 Results wait in `out/<print name>/` until the user picks Catalogue. Catalogue copies the original file, the skeleton and the template into `db/`, adds a row to `db/index.csv` and only then deletes `out/`. If anything fails, `out/` is still there to try again.
 
+To add a pile of unknown prints, put them in a folder inside `data/`, run `fpmatch` and pick the folder. Fast mode analyzes and catalogues each one with no pauses, skips any that fail and shows one report at the end.
+
 Search scores the print against every template and shows the top 5 with the paths to their pictures.
 
 **The software suggests. The examiner decides.** At the threshold, about 1 in 7 impostor pairs still scores as a match.

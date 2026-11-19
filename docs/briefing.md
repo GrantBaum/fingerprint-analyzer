@@ -1,323 +1,246 @@
 # fpmatch briefing
 
-This document explains how fpmatch works, one stage at a time. It's written to learn from and to teach from. Each stage covers what it does, why it's needed, how the algorithm works, its main tuning numbers and its known weaknesses.
+How fpmatch works, one stage at a time. It's written to learn from and to teach from.
 
-Every algorithm here is classic image processing, signal processing or geometry. There is no machine learning, no trained model and no network connection. Every number the program uses is written in the source code where you can read it.
+Everything here is classic image processing, signal processing or geometry. There is no machine learning, no trained model and no network connection. Every number the program uses is written in the source code.
 
 ## The big idea
 
-A fingerprint is a pattern of ridges. Examiners don't compare whole pictures. They compare **minutiae**, the places where a ridge does something special:
+A fingerprint is a pattern of ridges. Examiners don't compare whole pictures. They compare **minutiae**, the places where a ridge does something special. Each minutia has a position (x, y), a direction (an angle) and a type. Two prints of the same finger share many minutiae in the same layout. Prints of different fingers don't.
 
-- A **ridge ending** is where a ridge stops.
-- A **bifurcation** is where one ridge splits into two.
-
-Each minutia has a position (x, y) and a direction (an angle). Two prints from the same finger share many minutiae in the same arrangement. Prints from different fingers don't.
-
-So fpmatch does three jobs:
+fpmatch does three jobs:
 
 1. **Enhance** the picture so the ridges are clean.
 2. **Extract** the minutiae into a list called a template.
-3. **Match** two templates by lining them up and counting how many points agree.
+3. **Match** two templates by lining them up and counting the points that agree.
 
-Every stage saves a debug image in `out/<print name>/` so you can see what it did.
+Every stage saves a picture in `out/<print name>/` so you can see what it did.
+
+## Minutia types
+
+| Type | What it is | How it's found |
+| --- | --- | --- |
+| Ending | a ridge stops | crossing number 1 |
+| Bifurcation | a ridge splits in two | crossing number 3 |
+| Dot | a ridge so short it's just a spot | crossing number 0, or a tiny island alone in a valley |
+| Crossover | a short ridge joins two ridges, or two ridges cross | crossing number 4, or two bifurcations joined across the ridges |
+| Short ridge | a short piece of ridge on its own (an island) | two endings joined by 16 to 40 px of ridge |
+| Spur | a short branch off a ridge (a hook) | an ending joined to a bifurcation by 13 to 25 px |
+| Lake | a ridge splits and joins back up (an enclosure) | two bifurcations joined by two separate paths |
+
+Endings and bifurcations are the basic types. The rest are made of them, so a lake is also two bifurcations and a short ridge is also two endings. Both the shape and its parts go in the template.
+
+Only endings and bifurcations are used for matching. The section on overfitting below explains why.
 
 ## Test data
 
-All numbers here come from FVC2002 DB1_B. That's a public test set from the Fingerprint Verification Competition. It has 10 fingers with 8 impressions each, scanned at 500 dpi. Each image is 388 x 374 pixels. Our copy is missing 4 impressions of finger 104, so it has 76 prints.
+All numbers come from FVC2002 DB1_B, a public set from the Fingerprint Verification Competition. It has 10 fingers with 8 impressions each, 388 x 374 pixels at 500 dpi. Our copy is missing 4 impressions of finger 104, so it has 76 prints.
 
-At 500 dpi, one ridge plus one valley is about 9 pixels wide. Many tuning numbers below are based on that.
+At 500 dpi one ridge plus one valley is about 9 pixels wide. Many tuning numbers are based on that.
 
 ---
 
-## Stage 1: Load
+## Part 1: Enhance
 
-**What it does.** Reads the image file and turns it into a grid of gray values from 0 (black) to 255 (white). Saves `00_raw.png`.
+### Load and normalize
 
-**Why.** Every later stage works on numbers, not on a file.
+Reads the image as gray values from 0 to 255 (`00_raw.png`). Then shifts and scales them so the average is 0 and the spread (standard deviation) is 1 (`01_normalized.png`). A dark scan and a light scan look the same after this, so one set of settings works on both.
 
-**How.**
-1. Check that OpenCV can read the file type.
-2. Read it as grayscale with `cv::imread`.
-3. Copy every pixel into a `GrayImage`, which is a flat list of floats with an `at(x, y)` helper.
+The sums use a `double`, because a `float` loses precision over 145,000 additions.
 
-**Weaknesses.** None to speak of. A file that won't load stops the program with a clear error.
+**Weak spot.** It treats the whole image the same. A print that's dark on one side stays uneven. Binarize handles that later with a local threshold.
 
-## Stage 2: Normalize
+### Mask
 
-**What it does.** Shifts and scales the gray values so the average is 0 and the spread (standard deviation) is 1. Saves `01_normalized.png`.
+Decides which parts are finger and which are background (`02_mask.png`, black is finger). Background noise would turn into fake minutiae.
 
-**Why.** One scan might be dark and another might be light. After normalizing, both look the same to the rest of the pipeline, so the same settings work on both.
-
-**How.**
-1. Add up every pixel and divide by the count to get the mean. The sum uses a `double`, because a `float` loses precision over 145,000 additions.
-2. Add up the squared distance of every pixel from the mean and divide by the count. That's the variance. Its square root is the standard deviation.
-3. Replace every pixel with (pixel - mean) / standard deviation.
-
-**Weaknesses.** It treats the whole image the same. A print that's dark on one side and light on the other is still uneven after this step. The local threshold in binarize handles that.
-
-## Stage 3: Mask (segmentation)
-
-**What it does.** Decides which parts of the image are finger and which are background. Saves `02_mask.png`, where black is finger.
-
-**Why.** Background has dust and scanner noise. Without a mask, that noise turns into fake ridges and fake minutiae. The mask is also used later to throw out minutiae near the edge of the finger.
-
-**How.**
 1. Split the image into 16 x 16 blocks.
-2. Work out the variance of each block. Ridges make a block swing between dark and light, so finger blocks have high variance. Background is flat, so its variance is low.
-3. Blocks above the cutoff are finger.
-4. Clean up with three steps:
-   - **Majority vote.** A block is finger only if at least 5 of the 9 blocks around it are. This trims blocks that stick out.
-   - **Biggest blob.** Keep only the largest connected group of finger blocks. Specks of dirt disappear.
-   - **Fill holes.** Flood fill the background from the image edges. Any background left over is surrounded by finger, so it's a hole. Fill it.
-5. After binarize, every pixel outside the mask is set to background.
+2. Ridges make a block swing between dark and light, so finger blocks have high variance. Background is flat. Blocks above 0.1 are finger.
+3. Clean up: a block stays finger only if 5 of the 9 blocks around it are, then keep only the biggest blob, then fill any holes.
 
-The flood fill uses a to-do list of pixels instead of recursion. Recursion on a big region would run out of stack memory.
+The flood fill uses a to-do list of pixels, not recursion. Recursion on a big area would run out of stack memory.
 
-**Tuning.** Block size 16 px. Variance cutoff 0.1 (on normalized pixels).
+**Weak spot.** The edge is blocky, 16 px at a time. A faint part of a real finger can be marked as background.
 
-**Weaknesses.** The edge of the mask is blocky, 16 px at a time. A very faint area of a real finger can be marked as background. A smudge with texture can be marked as finger.
+### Orientation
 
-## Stage 4: Orientation field
+Works out which way the ridges run in each block (`03_orientation.png`, red lines). Gabor needs this.
 
-**What it does.** Works out which way the ridges run in each 16 x 16 block. Saves `03_orientation.png` with a red line per block.
+1. At every pixel, measure the **gradient** with Sobel weights. It points across the ridge, where brightness changes fastest.
+2. Average the gradients over each block. The catch: gradients on the two sides of a ridge point opposite ways and would cancel out.
+3. **The fix is to double every angle.** Then 0° and 180° both become 0°, so they add up instead of cancelling.
+4. Smooth with the 3 x 3 neighbors, twice, so one bad block gets outvoted.
+5. Halve the angle and turn it 90° to get the ridge direction.
 
-**Why.** The Gabor filter in stage 6 needs to know the ridge direction everywhere.
+**Weak spot.** Near the **core** (the center of a loop or whorl) and **deltas** the direction changes too fast for one angle per block.
 
-**How.**
-1. For every pixel, measure the **gradient** with the Sobel weights. The gradient points in the direction where brightness changes fastest. On a fingerprint that's across the ridges.
-2. The ridge runs at a right angle to the gradient.
-3. Average the gradients in a window around each block. There's a catch here. A gradient on one side of a ridge points the opposite way from the gradient on the other side (dark to light versus light to dark). A plain average would cancel them out to nothing.
-4. **The fix: double every angle.** 0° and 180° both become 0° and 360°, which is the same direction. Now they add up instead of cancelling. In practice each gradient (gx, gy) becomes (gx² - gy², 2·gx·gy).
-5. Smooth the field by adding up each block's 3 x 3 neighbors, twice. One bad block (a scar or a smudge) gets outvoted.
-6. Halve the angle to undo the doubling, then turn it 90° to get the ridge direction.
+### Frequency
 
-**Tuning.** The window is 2 times the block size. 2 smoothing passes.
+Measures how far apart the ridges are in each block (`04_frequency.png`, brighter means closer). Gabor has to be tuned to the spacing, like tuning a radio. This is the x-signature method from Hong, Wan and Jain (1998).
 
-**Weaknesses.** Near the **core** (the center of a loop or whorl) and **deltas** (the triangle-shaped areas) the ridge direction changes very fast. One angle per block can't describe that. Expect wrong angles there.
+1. Take a 32 x 16 window turned so its long side runs across the ridges.
+2. Average each row along the ridge. The 32 numbers make a wave that dips at every ridge.
+3. The average gap between dips is the ridge **period**. Frequency is 1 / period.
+4. Periods outside 3 to 25 px aren't real. Those blocks borrow the average of their neighbors.
 
-## Stage 5: Ridge frequency
+On 101_1 the average period is 9.3 px, which is right for 500 dpi.
 
-**What it does.** Measures how far apart the ridges are in each block. Saves `04_frequency.png`, where brighter means the ridges are closer together.
+### Gabor filter
 
-**Why.** The Gabor filter has to be tuned to the ridge spacing, just like a radio has to be tuned to a station.
+Cleans the ridges: joins breaks, fills pores and fades scratches (`05_enhanced.png`). Every break would otherwise become two fake endings. This is the biggest single improvement in the project.
 
-**How.** This is the **x-signature** method from Hong, Wan and Jain (1998).
-1. Picture a 32 x 16 pixel window centered on the block, turned so its long side runs across the ridges.
-2. Average each row of 16 pixels (along the ridge) into one number. That gives 32 numbers.
-3. Going across, those numbers dip at every ridge (dark) and rise at every valley (light). It looks like a wave.
-4. Find the dips. The average gap between them is the ridge **period**. Frequency is 1 / period.
-5. A period outside 3 to 25 pixels isn't a real ridge pattern, so that block is marked unknown.
-6. Unknown blocks take the average of their known neighbors. Repeat until every finger block has a value.
-7. Smooth once with a 3 x 3 average.
+1. A **Gabor kernel** is a small picture of a few parallel ridges: a wave faded out by a soft round blob.
+2. Turn it to the block's angle and stretch it to the block's spacing.
+3. Lay it over each pixel, multiply and add (**convolution**). Real ridges at that angle and spacing give a big answer. Noise gives a small one.
+4. Angles are rounded to 16 steps and periods to whole pixels, so about 40 kernels get built once and reused.
 
-On print 101_1 the average period comes out at 9.3 px, which is right for 500 dpi.
+**Tuning.** Sigma 4.0 (Hong). 16 angles.
 
-**Tuning.** Window 32 x 16 px. Valid period 3 to 25 px.
+**Weak spot.** It trusts the orientation. Where that's wrong (the core, scars) it draws confident ridges in the wrong direction. It's also the slowest stage.
 
-**Weaknesses.** Blocks with heavy noise have no clear wave and have to borrow from their neighbors. Sampling uses the nearest pixel, which is a little rough on diagonal ridges.
+---
 
-## Stage 6: Gabor filter
+## Part 2: Extract
 
-**What it does.** Cleans the ridges. It joins broken ridges, fills in pores and fades scratches. Saves `05_enhanced.png`.
+### Binarize
 
-**Why.** Real prints are messy. Pores, dry skin and creases break ridges into pieces. Every break looks like two ridge endings, which are fake minutiae. Gabor filtering is the single biggest improvement in this project.
+Every pixel becomes ridge (1) or valley (0) (`06_binary.png`). A pixel darker than the average of the 15 x 15 square around it is ridge. Then everything outside the mask is wiped.
 
-**How.**
-1. A **Gabor kernel** is a small picture of a wave (a cosine) faded out by a soft round blob (a Gaussian). It looks like a few parallel ridges.
-2. Build the kernel so its wave runs across the ridges at this block's angle, with this block's spacing.
-3. For each finger pixel, lay the kernel over the image centered on that pixel. Multiply the overlapping values and add them up. This is called **convolution**.
-4. If the patch has ridges at the matching angle and spacing, the answer is big. If it's noise, the answer is small. Ridges get stronger and noise fades.
-5. Subtract the kernel's own average first, so a flat patch gives exactly 0.
-6. Building a new kernel for every pixel would be slow. Instead angles are rounded to 16 steps and periods to whole pixels. Each kernel is built the first time it's needed and then reused. A print typically needs about 40 kernels.
+### Thin
 
-**Tuning.** Sigma 4.0 in both directions (Hong). 16 angles. Kernel radius 3 x sigma = 12 px.
+Shrinks every ridge to a line 1 pixel wide (`07_skeleton.png`), using Zhang and Suen (1984).
 
-**Weaknesses.** The filter trusts the orientation field. Where the orientation is wrong (the core, deltas, scars), Gabor draws confident ridges in the wrong direction. That can create fake minutiae near the core. It's also the slowest stage, at about 625 multiplications per pixel.
+1. A ridge pixel can be peeled off only if it has 2 to 6 ridge neighbors (not a tip and not buried) and removing it won't split the ridge.
+2. Two sub-steps take turns peeling opposite edges, so the line stays centered.
+3. Mark first, then delete all at once. Repeat until nothing changes.
 
-## Stage 7: Binarize
+**Weak spot.** Bumpy ridge edges leave short fake spurs. The filter cleans most of them up.
 
-**What it does.** Turns every pixel into ridge (1) or valley (0). Saves `06_binary.png`.
+### Find minutiae
 
-**Why.** Thinning and the crossing number need a clean yes or no for every pixel.
+Finds every point on the skeleton where something happens (`08_minutiae.png`).
 
-**How.**
-1. For each pixel, take the average of the 15 x 15 square around it.
-2. If the pixel is darker than that local average, it's ridge. Otherwise it's valley.
-3. Wipe everything outside the mask.
+1. Walk around a pixel's 8 neighbors and count the steps from 0 to 1. That's the **crossing number**. 0 is a dot, 1 is an ending, 2 is the middle of a ridge, 3 is a bifurcation and 4 is a crossing.
+2. **Ending angle.** Walk 10 px along the ridge. The angle points from there back out of the tip.
+3. **Bifurcation angle.** Walk 10 px along each branch. The two closest branches are the fork. The angle points away from the third one, the trunk.
 
-A local average works better than one threshold for the whole image, because one part of a print can be darker than another.
+Angles are in radians, 0 to 2π. 0 points right and π/2 points up. Image y points down, so every `atan2` flips the y difference. Hand-drawn test shapes confirmed it.
 
-**Tuning.** Window 15 px, about 1.5 ridge periods.
+On 101_1 this finds 95 points: 82 endings, 12 bifurcations and 1 dot.
 
-**Weaknesses.** It's slow (225 additions per pixel). Without Gabor in front of it, pores and breaks go straight through into the binary image.
+### Filter
 
-## Stage 8: Thin (skeletonize)
+Removes points that are probably fake (`09_filtered.png`). Each check only looks at what survived the one before.
 
-**What it does.** Shrinks every ridge to a line 1 pixel wide. Saves `07_skeleton.png`.
+1. **Mask edge.** Ridges get cut off at the edge of the finger, so drop anything within 12 px of it.
+2. **Spurs, islands and dots.** Walk from each ending. A junction within 12 px is a fake spur. Another ending within 15 px is a fake island. A piece 6 px or less with no other ridge within 3 px is a real **dot**, so it's kept as one.
+3. **Broken ridges.** Two endings within 15 px that point at each other are one ridge with a gap. Drop both.
+4. **Crowding.** Any two points closer than 6 px are noise. Drop both. If a dot or crossing is crowded against an ending or bifurcation, drop only the dot or crossing. That way the new types never change which endings and bifurcations survive.
 
-**Why.** On a 1 pixel line, endings and bifurcations become easy to spot by looking at a pixel's 8 neighbors.
+On 101_1 this takes 95 points down to 23.
 
-**How.** This is the Zhang-Suen algorithm (1984).
-1. Look at each ridge pixel and its 8 neighbors, named P2 to P9 going clockwise from the top.
-2. A pixel can be removed only if all three of these are true:
-   - It has 2 to 6 ridge neighbors. So it's not a tip and not buried inside a ridge.
-   - Walking around its neighbors finds exactly one 0 to 1 step. So removing it won't split the ridge.
-   - It's on the correct edge for this sub-step.
-3. Sub-step 1 peels the bottom and right edges. Sub-step 2 peels the top and left edges. Alternating keeps the line centered.
-4. Mark all removable pixels first, then delete them all at once. Deleting as you go would change the answer for the next pixel.
-5. Repeat until a full pass removes nothing.
+**Weak spot.** Real points near the edge are lost. The distances are fixed, so they don't adapt to unusually wide or narrow ridges.
 
-**Weaknesses.** Zhang-Suen can leave small stair steps on diagonal lines and short spurs where a ridge edge was bumpy. The filter stage cleans most of these up.
+### Shapes
 
-## Stage 9: Minutiae (crossing number)
+Finds the bigger shapes made of two filtered points joined by a short ridge (`10_shapes.png`, thick circles).
 
-**What it does.** Finds every ridge ending and bifurcation on the skeleton and measures its angle. Saves `08_minutiae.png` with endings circled in red and bifurcations in blue.
+- **Short ridge.** Walk from an ending. Reach another ending within 40 px.
+- **Spur.** Walk from an ending. Reach a bifurcation within 25 px. The fake spurs under 12 px are already gone.
+- **Lake.** Walk every branch of a bifurcation. Two branches reach the same other bifurcation within 40 px.
+- **Crossover.** One branch reaches another bifurcation within 20 px. At both ends the other two branches have to make a straight line and the bridge has to leave it at 45° or more. That's an H shape. A normal fork (a Y) fails this test.
 
-**Why.** Minutiae are what gets compared.
+Short ridges, lakes and crossovers look the same from both ends. Their angle is a line from 0 to π, not an arrow.
 
-**How.**
-1. For each skeleton pixel, walk around its 8 neighbors in a circle and count the steps from 0 to 1. This is the **crossing number**.
-   - 1 means one ridge touches the pixel. It's an **ending**.
-   - 2 means the pixel is in the middle of a ridge.
-   - 3 means three ridges meet. It's a **bifurcation**.
-2. A junction can light up two touching pixels. Only the first is kept.
-3. **Angle of an ending.** Walk 10 pixels along the ridge, away from the tip. The angle points from there back to the tip, out of the ridge.
-4. **Angle of a bifurcation.** Walk 10 pixels along each of the three branches. The two branches closest in angle are the fork. The third is the trunk. The angle points away from the trunk, toward the gap in the fork.
+On 101_1 this finds 1 spur. Print 108_6 has 12 shapes, including 5 lakes and a crossover. Zooming in on its skeleton showed each one really is that shape.
 
-**Angle convention.** Radians from 0 to 2π, like on a math graph. 0 points right, π/2 points up and angles turn counterclockwise. In an image, y points down, so every `atan2` call flips the y difference. This was checked with hand-drawn test shapes: a horizontal line, a vertical line and a Y.
+### Template
 
-**Tuning.** Angle trace length 10 px.
+Saves the points and the image size as plain text (`template.tmpl`). The header is `fpmatch-template <version> <width> <height> <count>`, then one `x y angle type` line per point. Angles get 17 digits so a save and load gives back exactly the same numbers. A test confirmed it.
 
-**Weaknesses.** Every break in the skeleton becomes two fake endings. Every bridge between ridges becomes two fake bifurcations. Without Gabor, print 101_1 gives 374 raw minutiae. With Gabor it gives 94.
+---
 
-## Stage 10: False minutiae filter
+## Part 3: Match
 
-**What it does.** Removes minutiae that are probably fake and reports how many each check removed. Saves `09_filtered.png`.
+### Align (Hough voting)
 
-**Why.** Fake minutiae add noise to matching. They make different fingers look alike and the same finger look different.
+Finds the rotation and shift that puts print A on top of print B, using the method from Ratha et al. (1996).
 
-**How.** Five checks, in order. Each one only looks at minutiae that survived the ones before it.
+1. Take every pair: one point from A, one from B.
+2. If they were the same point, the rotation is the difference in their angles. Turn A's point by that much. The leftover gap is the shift.
+3. Each pair casts one vote in a 3D grid of (rotation, dx, dy) bins. Wrong pairs scatter. Right pairs pile up in one bin.
+4. Score each bin with its 3 x 3 x 3 neighborhood, since a real answer can land on a bin edge.
+5. Take the top 5 peaks. For each one, average the exact votes near it for a sharper answer.
 
-1. **Mask edge.** If the 25 x 25 square around a minutia isn't all finger, drop it. Ridges get cut off at the edge of the finger, so every ridge there looks like it ends.
-2. **Spurs.** Walk from each ending along its ridge. If you hit a junction within 12 px, it's a tiny branch sticking off a ridge. Drop the ending and the bifurcation at its root.
-3. **Islands.** If that walk hits another ending within 15 px, it's a tiny ridge piece on its own. Drop both ends.
-4. **Broken ridges.** Two endings within 15 px of each other that point toward each other (within 45°) are one ridge with a gap in it. Drop both.
-5. **Crowding.** Any two minutiae closer than 6 px are noise. Drop both.
+Only endings vote with endings and bifurcations with bifurcations.
 
-On 101_1 without Gabor this takes 374 minutiae down to 65. With Gabor it takes 94 down to 23.
+A test turned 101_1 by 30° and shifted it by (10, -5). The aligner found 29.2° and (11.4, -6.5), and every point paired up.
 
-**Weaknesses.** Real minutiae close to the finger's edge are lost. A real short ridge (a "dot" or "short ridge" in forensic terms) gets removed as an island. The rules are fixed distances, so they can't adapt to unusually wide or narrow ridges.
+**Weak spot.** It finds one rigid move. Skin stretches, so on a hard press the far points miss.
 
-## Stage 11: Template
+### Score
 
-**What it does.** Saves the list of minutiae plus the image size in a plain text file, `template.tmpl`.
+1. Move every point of A by the alignment.
+2. A and B points pair up if they're within 12 px and 20°. Closest pairs pick first, and each point is used once.
+3. Score = matched² / (points in A x points in B). Both prints have to agree, so a print full of noise can't win by luck.
+4. Do this for all 5 peaks and keep the best. A score of **0.028** or more is a MATCH.
 
-**Why.** Matching only needs the points, not the picture. A template is small, easy to read and fast to compare.
+**Weak spot.** Two prints that share only a small area score low, because the points outside it count against them.
 
-**How.** The first line is a header: `fpmatch-template <version> <width> <height> <count>`. Then each minutia gets one line: `x y angle type`. Angles are written with 17 significant digits. That's the number a `double` needs so a save and load gives back exactly the same value. A test confirmed the round trip is exact.
-
-## Stage 12: Align (Hough voting)
-
-**What it does.** Finds the rotation and shift that puts print A on top of print B.
-
-**Why.** Nobody presses a finger in exactly the same spot twice. Before we can compare points, we have to undo the difference in position and angle.
-
-**How.** This is the method from Ratha et al. (1996).
-1. Take every possible pair: one minutia from A and one from B. With 30 minutiae each, that's 900 pairs.
-2. For each pair, ask: if these two are the same point, what rotation and shift would line them up?
-   - The rotation is the difference between their angles.
-   - Turn A's point by that rotation around A's center. The shift is whatever gap is left between it and B's point.
-3. Each pair casts one vote in a 3D grid of (rotation, dx, dy) bins.
-4. Wrong pairs vote all over the place. Right pairs all vote for the same answer, so that bin piles up votes.
-5. A real match often lands on the line between two bins and splits its votes. So each bin is scored by adding up its 3 x 3 x 3 neighborhood.
-6. Take the top 5 peaks. After each pick, wipe the area around it so the next pick is a really different alignment.
-7. For each peak, average the exact rotation and shift of every vote near it. That's sharper than the bin center. Rotations are averaged as sine and cosine, so -179° and 179° average to 180°, not 0°.
-
-Only endings vote with endings and bifurcations with bifurcations. This cuts down the wrong votes.
-
-A test aligned the template of print 101_1 with a copy of itself turned by 30° and shifted by (10, -5). The aligner found 29.2° and (11.4, -6.5). That's off by about a pixel, because minutia positions are whole pixels and get rounded after turning. All 23 points still paired up and the score was 1.
-
-**Tuning.** Bins of 5° and 8 px. Rotation up to 60° either way. Shift up to 300 px. 5 peaks tried.
-
-**Weaknesses.** It finds one rigid rotation and shift. Skin stretches, so a print pressed hard is a little distorted. Points far from the center then miss by more than the tolerance. Pressure can also turn an ending into a bifurcation. Same-type voting then misses that pair.
-
-## Stage 13: Score
-
-**What it does.** Pairs up minutiae after alignment and turns the count into a score from 0 to 1. Saves `aligned.png` for a compare.
-
-**How.**
-1. Move every minutia of A by the alignment.
-2. List every (A, B) pair closer than 12 px whose angles differ by less than 20°.
-3. Sort that list by distance. Go down it and accept a pair only if neither point is already taken. This is a **greedy** pairing. The best pairs get first pick.
-4. Score = matched² / (count in A x count in B).
-
-Why this formula? matched / A is "how much of A was found in B". matched / B is the other way around. Multiplying them means both prints have to agree. A print with hundreds of noisy minutiae can't score high just by matching lots of points by luck.
-
-5. Steps 1 to 4 run for each of the 5 Hough peaks. The best score wins.
-6. A score at or above **0.028** is called a MATCH. That number is the EER point from the evaluation below.
-
-**Weaknesses.** Two impressions that only share a small area get a low score, because all the points outside the shared area count against them. There is an `OVERLAP_ONLY` switch in `matching.cpp` that only counts points in the shared area. It didn't help on this data, so it's off. It's a good thing to experiment with.
+---
 
 ## The database
 
-**What it does.** Keeps catalogued prints in `db/` on the local machine.
+Results wait in `out/<print name>/` until the user picks Catalogue. Catalogue copies the original file, the skeleton and the template into `db/`, adds a row to `db/index.csv` and only then deletes `out/`. If anything fails, `out/` is still there to try again.
 
-**How.**
-- After analysis, results wait in `out/<print name>/`. Nothing goes into the database until the user picks Catalogue.
-- Catalogue gives the next 4-digit ID by reading `db/index.csv`. It copies the **original** file (not a converted copy) to `db/raw/`, the skeleton to `db/skel/` and the template to `db/tmpl/`, all named by ID.
-- The order is careful. First copy the files. Then write the index row. Then delete `out/`. If anything fails partway, the print isn't in the index and `out/` is still there, so the user can try again.
-- Search loads every template, scores the current print against each one and shows the top 5. It lists the raw and skeleton paths so a person can look at the prints.
+Search scores the print against every template and shows the top 5 with the paths to their pictures.
 
-**The software suggests. The examiner decides.** The score is a ranking tool, not a verdict. At the threshold, roughly 1 in 7 impostor pairs still scores as a match. A trained examiner has to compare the actual prints.
+**The software suggests. The examiner decides.** At the threshold, about 1 in 7 impostor pairs still scores as a match.
 
 ## Evaluation
 
-`fpmatch eval data` runs the standard FVC test.
+`fpmatch eval data` runs the FVC test.
 
-- **Genuine pairs** are two impressions of the same finger. Every impression is compared with every other impression of its finger, once. That's 258 pairs here.
-- **Impostor pairs** are two different fingers. The first impression of each finger is compared with the first impression of every other finger. That's 45 pairs.
-- **FMR (false match rate):** the share of impostor pairs at or above the threshold. These are wrong accusations.
-- **FNMR (false non-match rate):** the share of genuine pairs below the threshold. These are missed matches.
-- Raising the threshold lowers FMR and raises FNMR. The **EER (equal error rate)** is where they meet. Lower is better.
-
-### Results on DB1_B
+- **Genuine pairs:** every impression against every other impression of the same finger. 258 pairs.
+- **Impostor pairs:** the first impression of each finger against the first of every other finger. 45 pairs.
+- **FMR:** impostor pairs at or above the threshold. Wrong accusations.
+- **FNMR:** genuine pairs below the threshold. Missed matches.
+- **EER:** where FMR and FNMR are equal. Lower is better.
 
 | Version | EER |
 | --- | --- |
-| Baseline: no enhancement | 24.04% |
+| No enhancement, first matcher | 24.04% |
 | With orientation, frequency and Gabor | 15.53% |
 | Plus same-type voting and 5 Hough peaks (final) | **13.45%** |
 
-At the final threshold of 0.028, FMR is 13.3% and FNMR is 14.0%.
+The final matcher without enhancement scores 28.98%. Same-type voting needs the clean types that Gabor gives.
 
-For comparison, the best commercial systems in FVC2002 got under 1% on the full DB1 set. They used decades of engineering and much more advanced matching. 13.45% is a good result for a from-scratch teaching system.
+At 0.028, FMR is 13.3% and FNMR is 14.0%. The best systems in FVC2002 got under 1% on the full DB1. 13.45% is good for a from-scratch teaching system.
 
 ### A lesson about overfitting
 
-Every tuning number was tried on the same 76 prints that produce the EER. That's risky. With only 45 impostor pairs, each one moves the FMR by 2.2%. A setting can look better just by luck.
+Every setting was tuned on the same 76 prints that give the EER. With only 45 impostor pairs, one pair moves the FMR by 2.2%, so a change can look good by luck. Every change was also tested on all 2,880 impostor pairs. It was only kept if it helped on both and there was a clear reason.
 
-To guard against that, every change was also tested against all 2,880 impostor pairs (every print of one finger against every print of another). A change was only kept if it helped on both tests and there was a clear reason why.
+- **Binarize window 11 px.** EER dropped from 13.45% to 11.18% on the 45 pairs but got worse on the 2,880. It was luck, so it wasn't kept.
+- **Matching with the shapes.** EER rose from 13.45% to 15.34% (15.10% on the 2,880). A little more pressure turns a lake into two bifurcations or a short ridge into a broken one, so the shapes rarely show up the same way twice. They stay in the template for the examiner but aren't scored. `USE_SHAPES` in `matching.cpp` turns them on to try it.
 
-One example: a binarize window of 11 px instead of 15 px dropped the EER from 13.45% to 11.18% on the 45 pairs. On the 2,880 pairs it made things slightly worse. It was luck, so it was not kept. The final settings score 13.98% on the 2,880-pair test, close to the official 13.45%. That's a good sign the number is honest.
+The final settings score 13.98% on the 2,880-pair test, close to the official number. That's a good sign it's honest.
 
 ### Why the remaining errors happen
 
-Looking at the genuine pairs with the lowest scores:
-
-- **Small overlap.** Print 103_4 only shows the top of the finger. Print 103_3 shows the middle. They share very little skin, so there are few points to pair.
-- **Big rotation and distortion.** The prints of finger 110 are pressed at very different angles and pressures. The core sits in very different places.
-- **Core confusion.** Near the core the orientation is unreliable. Gabor can draw wrong ridges there and create fake minutiae.
+- **Small overlap.** 103_4 shows only the top of the finger and 103_3 the middle. They share little skin.
+- **Rotation and pressure.** The prints of finger 110 are pressed at very different angles.
+- **The core.** Orientation is unreliable there, so Gabor can draw wrong ridges and create fake minutiae.
 
 ## Glossary
 
-- **Bifurcation:** a ridge that splits into two.
 - **Convolution:** sliding a small grid of weights over an image, multiplying and adding at every spot.
 - **Core:** the center of a loop or whorl.
 - **Crossing number:** the number of 0 to 1 steps around a pixel's 8 neighbors.
-- **Delta:** a triangle-shaped area where ridges flow in three directions.
-- **EER:** equal error rate, where false matches and false non-matches are equally common.
+- **Delta:** a triangle-shaped area where ridges flow three ways.
+- **EER:** equal error rate, where false matches and missed matches are equally common.
 - **Gradient:** the direction and strength of the fastest brightness change.
-- **Minutia (plural minutiae):** a ridge ending or bifurcation.
+- **Minutia (plural minutiae):** a point where a ridge does something special. See the types table.
 - **Skeleton:** the ridges thinned to 1 pixel wide.
 - **Template:** the list of minutiae for one print.
 

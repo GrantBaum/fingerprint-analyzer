@@ -167,7 +167,7 @@ Results on DB1_B (76 prints, since finger 104 only has 4 impressions here, so 25
 | With orientation, frequency and Gabor | 15.53% |
 | Plus same-type voting and 5 Hough peaks (final) | **13.45%** |
 
-The match threshold (0.028) sits at the final EER point.
+The match threshold (0.028) sits at the final EER point. The final matcher without enhancement scores 28.98%, since same-type voting needs the clean types Gabor gives.
 
 ## Tuning parameters
 

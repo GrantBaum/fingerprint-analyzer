@@ -17,6 +17,7 @@
 #include <sstream>
 #include <string>
 #include <thread>
+#include <vector>
 #include <unistd.h>
 
 namespace ui {
@@ -35,6 +36,10 @@ inline int nameWidth = 14;
 // Every stage stays on screen at least this long, so fast stages don't just
 // flash by. eval sets it to 0 because it runs hundreds of prints.
 inline int minStageMs = 250;
+
+// Fast mode: no pauses, no typewriter text and no scan animations. Batch runs
+// turn it on so a folder of prints doesn't take forever, then turn it off.
+inline bool fast = false;
 
 // ---- colors (ANSI escape codes) --------------------------------------------
 
@@ -76,7 +81,7 @@ inline std::string repeat(const std::string& s, int count) {
 
 // Prints text one character at a time, like a typewriter.
 inline void typeOut(const std::string& text, int msPerChar = 12) {
-    if (!enabled) { std::cout << text; return; }
+    if (!enabled || fast) { std::cout << text; return; }
     for (char c : text) {
         std::cout << c << std::flush;
         // Don't pause on the middle bytes of multi-byte characters like █
@@ -191,7 +196,7 @@ private:
         if (!enabled) return;
         // wait out the rest of minStageMs so the "..." line can be seen
         long long left = minStageMs - elapsedMs();
-        if (ok && left > 0) std::this_thread::sleep_for(std::chrono::milliseconds(left));
+        if (ok && left > 0 && !fast) std::this_thread::sleep_for(std::chrono::milliseconds(left));
         std::cout << CLEAR_LINE << " ";
         if (ok) {
             std::cout << GREEN << "[+]" << RESET << " " << pad(name_, nameWidth)
@@ -295,10 +300,35 @@ inline char menu(const std::string& title, const std::string& letters,
     }
 }
 
+// A numbered list in columns, filled top to bottom like ls, such as
+//   [ 1] 101_1.tif    [ 4] 101_4.tif    [ 7] cases/
+// Numbers start at 1. Fits the columns into about 78 characters.
+inline void numberedList(const std::vector<std::string>& items) {
+    if (items.empty()) return;
+    int digits = static_cast<int>(std::to_string(items.size()).size());
+    size_t longest = 0;
+    for (const std::string& item : items) longest = std::max(longest, item.size());
+    int cell = 2 + digits + 2 + static_cast<int>(longest) + 3;   // "[" n "] " name gap
+    int columns = std::max(1, 76 / cell);
+    int rows = (static_cast<int>(items.size()) + columns - 1) / columns;
+
+    for (int r = 0; r < rows; r++) {
+        std::cout << "  ";
+        for (int c = 0; c < columns; c++) {
+            int i = c * rows + r;
+            if (i >= static_cast<int>(items.size())) break;
+            std::string n = std::to_string(i + 1);
+            n = std::string(digits - n.size(), ' ') + n;
+            std::cout << paint(CYAN, "[" + n + "]") << " " << pad(items[i], static_cast<int>(longest) + 3);
+        }
+        std::cout << "\n";
+    }
+}
+
 // A fake "scanning" bar that fills up over ms milliseconds, for suspense
 // before a result is shown. The work is already done, this is pure drama.
 inline void scan(const std::string& label, int ms = 700) {
-    if (!enabled) return;
+    if (!enabled || fast) return;
     const int width = 24;
     std::string on  = unicode ? "▓" : "#";
     std::string off = unicode ? "░" : "-";

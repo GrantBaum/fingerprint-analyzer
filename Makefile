@@ -8,6 +8,7 @@ BIN := build/fpmatch
 IMG ?= data/101_1.tif
 
 # make        -> compile only
+# make start  -> compile if needed, then open the start menu (pick from data/)
 # make run    -> compile if needed, then run on IMG
 # make run IMG=data/102_3.tif   -> run on a different print
 # make clean  -> delete build/ and out/
@@ -18,10 +19,13 @@ $(BIN): $(SRC) $(HDR)
 	@mkdir -p build
 	$(CXX) $(CXXFLAGS) $(SRC) -o $(BIN) $(OPENCV)
 
+start: $(BIN)
+	./$(BIN)
+
 run: $(BIN)
 	./$(BIN) $(IMG)
 
 clean:
 	rm -rf build out
 
-.PHONY: all run clean
+.PHONY: all start run clean

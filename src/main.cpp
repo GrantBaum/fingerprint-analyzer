@@ -1,6 +1,7 @@
 //nessecary libs for ts
 #include <algorithm>
 #include <cctype>
+#include <chrono>
 #include <filesystem>
 #include <fstream>
 #include <iostream>
@@ -355,37 +356,191 @@ std::vector<std::string> listImages(const std::string& folder) {
     return images;
 }
 
-// runImport: analyzes and catalogues every image in a folder. The name comes
-// from the file name and the finger is "unknown".
-std::string runImport(const std::string& folder) {
+// runBatch: fast mode. Analyzes and catalogues every image in a folder, one
+// after another, with no pauses. Each print still shows its stages. The name
+// comes from the file name and the finger is "unknown". This is how a pile of
+// unknown prints goes into the database.
+std::string runBatch(const std::string& folder) {
     std::vector<std::string> images = listImages(folder);
     if(images.empty()){
-        throw std::runtime_error("runImport: no .tif, .png, .bmp or .jpg files in " + folder);
+        throw std::runtime_error("runBatch: no .tif, .png, .bmp or .jpg files in " + folder);
     }
+
+    ui::fast = true; //no pauses and no typing effects until the batch is done
+    ui::warn("FAST MODE  " + std::to_string(images.size()) + " prints from " + folder + ", pauses off");
+    auto t0 = std::chrono::steady_clock::now();
 
     std::vector<std::string> failed;   // "file: reason" for each one that broke
     std::string firstId, lastId;
-    {
-        ui::Stage s("Importing");
-        for(size_t i = 0; i < images.size(); i++){
-            std::string name = std::filesystem::path(images[i]).stem().string();
-            try {
-                ui::Mute quiet; //hide this print's own stages
-                std::string outDir = outDirFor(images[i]);
-                analyzePrint(images[i], outDir);
-                lastId = catalogue(images[i], outDir, name, "unknown", pipelineVersion());
-                if(firstId.empty()) firstId = lastId;
-            } catch (const std::exception& e) {
-                failed.push_back(name + ": " + e.what()); //keep going, one bad print shouldn't stop the rest
-            }
-            s.progress(i + 1, images.size());
+    for(size_t i = 0; i < images.size(); i++){
+        std::string file = std::filesystem::path(images[i]).filename().string();
+        std::string name = std::filesystem::path(images[i]).stem().string();
+        ui::header("EXHIBIT " + std::to_string(i + 1) + " OF " + std::to_string(images.size()) + "  " + file);
+        try {
+            std::string outDir = outDirFor(images[i]);
+            analyzePrint(images[i], outDir);
+            ui::Stage s("Cataloguing");
+            lastId = catalogue(images[i], outDir, name, "unknown", pipelineVersion());
+            s.done("ID " + lastId + "  " + name + "  unknown");
+            if(firstId.empty()) firstId = lastId;
+        } catch (const std::exception& e) {
+            failed.push_back(file + ": " + e.what()); //keep going, one bad print shouldn't stop the rest
+            ui::warn(e.what());
         }
-        s.done(std::to_string(images.size() - failed.size()) + " of " + std::to_string(images.size()) + " catalogued");
     }
 
+    ui::fast = false;
+    double seconds = std::chrono::duration_cast<std::chrono::milliseconds>(
+                         std::chrono::steady_clock::now() - t0).count() / 1000.0;
+    int good = images.size() - failed.size();
+
+    //the report. a box on screen, plain lines when piped to a file
+    std::string ids = "none";
+    if(!firstId.empty()) ids = firstId + " to " + lastId;
+    std::string failText = std::to_string(failed.size());
+    if(!failed.empty()) failText = ui::paint(ui::RED, failText + "   see the warnings above");
+    const std::string report[5] = {
+        "folder       " + folder,
+        "catalogued   " + ui::paint(ui::BOLD, std::to_string(good) + " of " + std::to_string(images.size())) + " prints",
+        "IDs          " + ids,
+        "failed       " + failText,
+        "time         " + ui::fixed(seconds, 1) + " s"
+    };
+    if(ui::enabled){
+        ui::scan("Tallying");
+        ui::box("BATCH REPORT", report, 5);
+    }
+    else{
+        for(const std::string& r : report) ui::line(r);
+    }
     for(const std::string& f : failed) ui::warn(f);
-    if(firstId.empty()) return "Nothing was imported";
-    return "Imported as IDs " + firstId + " to " + lastId;
+
+    if(firstId.empty()) return "Nothing was catalogued";
+    return "Catalogued " + std::to_string(good) + " prints as IDs " + ids;
+}
+
+// runSingle: the normal one print analysis. Runs the pipeline, then the case
+// menu. Returns the text for the final screen.
+std::string runSingle(const std::string& path) {
+    std::string outDir = outDirFor(path);
+    Template t = analyzePrint(path, outDir);
+    ui::success("Analysis complete. Results waiting in " + outDir);
+    return runMenu(path, outDir, t);
+}
+
+// DataEntry: one thing in data/ that the start menu can pick, a print or a
+// folder of prints.
+struct DataEntry {
+    std::string path;
+    bool folder = false;
+    int prints = 0;     // how many prints a folder holds
+};
+
+// scanData: every print in data/, then every folder in data/ that has prints
+// in it, each sorted by name.
+std::vector<DataEntry> scanData() {
+    std::vector<DataEntry> entries;
+    if(!std::filesystem::is_directory("data")) return entries; //nothing there yet
+
+    for(const std::string& path : listImages("data")){
+        DataEntry e;
+        e.path = path;
+        entries.push_back(e);
+    }
+
+    std::vector<std::string> folders;
+    for(const auto& item : std::filesystem::directory_iterator("data")){
+        if(item.is_directory()) folders.push_back(item.path().string());
+    }
+    std::sort(folders.begin(), folders.end());
+    for(const std::string& path : folders){
+        DataEntry e;
+        e.path = path;
+        e.folder = true;
+        e.prints = listImages(path).size();
+        if(e.prints > 0) entries.push_back(e); //skip empty folders
+    }
+    return entries;
+}
+
+// confirmBatch: asks before a batch writes a whole folder into the database.
+bool confirmBatch(const std::string& folder, int prints) {
+    std::string answer = ui::ask("Catalogue all " + std::to_string(prints) + " prints in " + folder +
+                                 " as unknown? (y/n)");
+    if(answer == "y" || answer == "Y") return true;
+    ui::info("cancelled, nothing was catalogued");
+    return false;
+}
+
+// runStart: the start menu, shown when fpmatch runs with no arguments. Lists
+// everything in data/ so a print can be dragged in there and picked by number.
+// Returns the text for the final screen, or "" to quit without one.
+std::string runStart() {
+    while(true){
+        std::vector<DataEntry> entries = scanData();
+        int images = 0, folders = 0;
+        std::vector<std::string> names;
+        for(const DataEntry& e : entries){
+            std::string name = std::filesystem::path(e.path).filename().string();
+            if(e.folder){
+                folders++;
+                name += "/ (" + std::to_string(e.prints) + ")";
+            }
+            else images++;
+            names.push_back(name);
+        }
+
+        ui::header("EVIDENCE LOCKER");
+        ui::info("data/   " + std::to_string(images) + " prints   " + std::to_string(folders) + " folders");
+        if(entries.empty()){
+            ui::warn("data/ is empty. drag prints into it, then pick [r]");
+        }
+        ui::numberedList(names);
+        std::cout << "\n";
+        if(!entries.empty()){
+            std::cout << "  " << ui::paint(ui::CYAN, "[#]") << " Analyze a print, or catalogue a whole folder (fast mode)\n";
+        }
+        if(images > 0){
+            std::cout << "  " << ui::paint(ui::CYAN, "[a]") << " Catalogue every print in data/ (fast mode)\n";
+        }
+        std::cout << "  " << ui::paint(ui::CYAN, "[r]") << " Rescan data/\n";
+        std::cout << "  " << ui::paint(ui::CYAN, "[q]") << " Quit\n";
+
+        //keep asking until the answer makes sense
+        while(true){
+            std::cout << " " << ui::paint(ui::CYAN, ">") << " " << std::flush;
+            std::string answer;
+            if(!std::getline(std::cin, answer)) return ""; //input ran out
+            if(answer == "q") return "";
+            if(answer == "r") break; //back to the top, which scans again
+            if(answer == "a" && images > 0){
+                if(confirmBatch("data/", images)) return runBatch("data");
+                break;
+            }
+
+            //a number picks an entry
+            bool digits = !answer.empty();
+            for(char c : answer){
+                if(!std::isdigit(static_cast<unsigned char>(c))) digits = false;
+            }
+            if(digits && answer.size() < 6){
+                int pick = std::stoi(answer);
+                if(pick >= 1 && pick <= (int)entries.size()){
+                    const DataEntry& e = entries[pick - 1];
+                    if(!e.folder) return runSingle(e.path);
+                    if(confirmBatch(e.path + "/", e.prints)) return runBatch(e.path);
+                    break;
+                }
+            }
+            if(entries.empty()){
+                std::cout << " " << ui::paint(ui::YELLOW, "[!] pick r or q") << "\n";
+            }
+            else{
+                std::cout << " " << ui::paint(ui::YELLOW, "[!] pick a number from 1 to " + std::to_string(entries.size()) +
+                                              ", or a, r or q") << "\n";
+            }
+        }
+    }
 }
 
 // runEval: the FVC test on an FVC "B" set, where files are named
@@ -539,8 +694,9 @@ std::string runEval(const std::string& folder) {
 // printUsage: the list of commands.
 void printUsage(const char* program) {
     std::cerr << "usage:\n"
+              << "  " << program << "                    start menu: pick a print or folder from data/\n"
               << "  " << program << " <image>            analyze one print, then show the menu\n"
-              << "  " << program << " import <folder>    analyze and catalogue every image in a folder\n"
+              << "  " << program << " import <folder>    catalogue every image in a folder (fast mode)\n"
               << "  " << program << " eval <folder>      run the FVC test on an FVC B set\n"
               << "add --no-enhance to any of them to skip the orientation, frequency and Gabor stages\n";
 }
@@ -553,11 +709,12 @@ int main(int argc, char** argv) {
         if (a == "--no-enhance") useEnhance = false;
         else args.push_back(a);
     }
-    if (args.empty()) {
+    std::string command;
+    if (!args.empty()) command = args[0];
+    if (command == "help" || command == "--help" || command == "-h") {
         printUsage(argv[0]);
-        return 1;
+        return 0;
     }
-    std::string command = args[0];
 
     //import and eval need a folder after them
     if ((command == "import" || command == "eval") && args.size() < 2) {
@@ -567,20 +724,22 @@ int main(int argc, char** argv) {
 
     ui::banner();
     try {
-        if (command == "import") {
-            ui::finalScreen(true, runImport(args[1]));
+        if (command.empty()) {
+            std::string result = runStart();
+            if (result.empty()) ui::info("case closed");
+            else ui::finalScreen(true, result);
+        }
+        else if (command == "import") {
+            ui::finalScreen(true, runBatch(args[1]));
         }
         else if (command == "eval") {
             ui::finalScreen(true, runEval(args[1]));
         }
         else {
-            std::string path = command;   //no command word, so it's an image
-            std::string outDir = outDirFor(path);
-            Template t = analyzePrint(path, outDir);
-            ui::success("Analysis complete. Results waiting in " + outDir);
-            ui::finalScreen(true, runMenu(path, outDir, t));
+            ui::finalScreen(true, runSingle(command));   //no command word, so it's an image
         }
     } catch (const std::exception& e) {
+        ui::fast = false; //a batch that blew up still gets a proper ending
         ui::finalScreen(false, e.what());
         return 1;
     }

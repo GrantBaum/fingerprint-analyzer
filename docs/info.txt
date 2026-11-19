@@ -1,16 +1,32 @@
 DB is for holding prints in a database. The database is local on the computer to keep in the spirit
-of processing locally for security and speed reasons.
-    - index.csv holds the name, date, path to the source image AND processed image AND template, which finger (could be unknown) and an ID number for each print
-    - all the prints data will also be stored in here.
-The ID for the source image and processed image will match so that they can be paired.
+of processing locally for security and speed reasons. None of it goes on GitHub.
+    - index.csv holds one row per print: ID, name, finger (could be unknown), path to the source image,
+      path to the skeleton, path to the template, the date it was added and the pipeline version
+    - raw/ holds the original image files exactly as they came in, named by ID (0001.tif ...)
+    - skel/ holds the skeleton images, named by ID (0001.png ...)
+    - tmpl/ holds the templates, named by ID (0001.tmpl ...)
+The ID for the source image, skeleton and template always match so that they can be paired.
 
-The templates will have just minutae and coordinates, and that is what will be compared against.
+The templates will have just minutiae and coordinates, and that is what will be compared against.
 if a match is found, the processed and unprocessed photos can be manually reviewed by the technician to
-ensure validity or at least get eyes on the subject.
+ensure validity or at least get eyes on the subject. The software suggests. The examiner decides.
+
+OUT holds results that are waiting. After a print is analyzed, everything about it sits in
+out/<print name>/ until it is catalogued (moved into db/) or discarded. out/eval/ holds the
+results of fpmatch eval, including scores.csv.
+
+DATA holds test prints (FVC2002 DB1_B). Not committed.
 
 SRC holds all the code. It can be ran by compiling with the make command and then running with the proper arguments
 specified in the README.md documentation.
-    - image_processing.cpp processes the image for the database for comparison
+    - fingerprint.hpp has the shared structs and every function declaration
+    - image_processing.cpp processes the image: load, normalize, mask, binarize, thin
+    - enhance.cpp cleans up the ridges before binarize: orientation, frequency, Gabor filter
+    - minutiae.cpp finds the ridge endings and bifurcations, filters out fakes, saves and loads templates
+    - matching.cpp lines two templates up and scores them
+    - database.cpp catalogues, searches and discards
+    - main.cpp runs everything: the command line, the case menu and eval
     - ui.hpp is for the cool and clean UI
 
 DOCS holds any additional info (like this file)
+    - briefing.md explains how every stage works, for learning and for teaching the class

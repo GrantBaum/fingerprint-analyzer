@@ -42,12 +42,16 @@ Drag a print into `data/`, run `fpmatch` and pick it by number.
   [#] Analyze a print, or catalogue a whole folder (fast mode)
   [a] Catalogue every print in data/ (fast mode)
   [r] Rescan data/
+  [x] Clear data/ (deletes everything in it)
+  [w] Wipe the database (12 prints)
   [q] Quit
 ```
 
-- **A print number** runs the normal analysis and then the case menu, exactly like `fpmatch <image>`.
+- **A print number** runs the normal analysis and then the case menu, like `fpmatch <image>`. When you're done with it, a NEXT menu offers **Scan another print**, which goes back to the evidence locker. That way you can catalogue a lot of people's prints in a row without restarting.
 - **A folder number** or **[a]** catalogues every print in it as an unknown print, after asking first. That's for adding a pile of unknown prints to the database.
 - **[r]** looks at `data/` again, after you drag new files in.
+- **[x]** deletes every file and folder in `data/`. You have to type CLEAR to confirm.
+- **[w]** deletes every print in the database and empties `db/index.csv`. You have to type WIPE to confirm. The `db/` folders stay.
 
 **Fast mode** is what folders and `import` use. Each print still shows its stages under an EXHIBIT header, but there are no pauses or typing effects. A print that fails is skipped and the rest keep going. At the end a BATCH REPORT box shows how many were catalogued, their IDs and anything that failed, then one SUCCESS screen.
 

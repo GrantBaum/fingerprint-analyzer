@@ -17,6 +17,7 @@ results of fpmatch eval, including scores.csv.
 
 DATA holds prints to work on. Not committed. Running fpmatch with no arguments lists everything in data/
 by number, so a print can be dragged in and picked. A folder inside data/ can be catalogued all at once.
+The start menu can also clear data/ ([x], type CLEAR) and wipe the database ([w], type WIPE).
 
 SRC holds all the code. It can be ran by compiling with the make command and then running with the proper arguments
 specified in the README.md documentation.

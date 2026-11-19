@@ -486,8 +486,9 @@ std::vector<Minutia> filterMinutiae(const std::vector<Minutia>& found, const Bin
         }
     }
 
-    //check 4: anything still crowded together is noise, so drop both. a dot
-    //is the least sure of all, so a dot next to anything else only drops the dot
+    //check 4: anything still crowded together is noise, so drop both. dots and
+    //crossings are less sure than endings and bifurcations, so when one is
+    //crowded against an ending or bifurcation only the dot or crossing goes
     std::vector<bool> crowded(n, false);
     for(int i = 0; i < n; i++){
         if(!keep[i]) continue;
@@ -495,10 +496,10 @@ std::vector<Minutia> filterMinutiae(const std::vector<Minutia>& found, const Bin
             if(!keep[j]) continue;
             if(distance(minutiae[i], minutiae[j]) >= MIN_DISTANCE) continue;
 
-            bool dotI = (minutiae[i].type == DOT);
-            bool dotJ = (minutiae[j].type == DOT);
-            if(dotI || !dotJ) crowded[i] = true;
-            if(dotJ || !dotI) crowded[j] = true;
+            bool basicI = (minutiae[i].type == ENDING || minutiae[i].type == BIFURCATION);
+            bool basicJ = (minutiae[j].type == ENDING || minutiae[j].type == BIFURCATION);
+            if(!basicI || basicJ) crowded[i] = true;
+            if(!basicJ || basicI) crowded[j] = true;
         }
     }
     for(int i = 0; i < n; i++){

@@ -90,7 +90,7 @@ std::string nowStamp() {
 // (Any files that did get copied will be overwritten by the retry, because the
 // retry gets the same ID.)
 std::string catalogue(const std::string& rawPath, const std::string& outDir,
-                      const std::string& name, const std::string& finger) {
+                      const std::string& name, const std::string& finger, const std::string& version) {
 
     //commas or new lines would break the csv
     if(name.empty()){
@@ -128,7 +128,7 @@ std::string catalogue(const std::string& rawPath, const std::string& outDir,
     e.skeleton = DB_DIR + "skel/" + id + ".png";
     e.tmpl = DB_DIR + "tmpl/" + id + ".tmpl";
     e.added = nowStamp();
-    e.version = PIPELINE_VERSION;
+    e.version = version;
 
     //step 1: copy the files in. the ORIGINAL file, not 00_raw.png, so nothing
     //about the evidence is changed

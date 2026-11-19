@@ -15,6 +15,17 @@ const int BINARIZE_WINDOW = 15;      // binarize window size, change to test oth
 const int MASK_BLOCK = 16;           // segmentation block size in pixels
 const float MASK_VARIANCE = 0.1f;    // blocks below this variance are background
 
+// orientation, frequency and Gabor enhancement before binarize. on by default
+// because it cut the EER on DB1_B from 24.0% to 15.5%. --no-enhance turns it off
+bool useEnhance = true;
+
+// pipelineVersion: what goes in the version column of index.csv. Templates made
+// without enhancement get "-plain" so they're never mixed up with normal ones.
+std::string pipelineVersion() {
+    if (useEnhance) return PIPELINE_VERSION;
+    return std::string(PIPELINE_VERSION) + "-plain";
+}
+
 // outDirFor: the folder a print's results wait in, like out/101_1/
 std::string outDirFor(const std::string& path) {
     return "out/" + std::filesystem::path(path).stem().string() + "/";
@@ -54,6 +65,42 @@ Template analyzePrint(const std::string& path, const std::string& outDir) {
         for (uint8_t p : mask.pixels) finger += p;
         double percent = 100.0 * finger / mask.pixels.size();
         s.done("block " + std::to_string(MASK_BLOCK) + "  " + ui::fixed(percent, 1) + "% finger");
+    }
+
+    // ---- Enhance (optional) --------------------------------------------
+    if (useEnhance) {
+        BlockField orient;
+        {
+            ui::Stage s("Orientation");
+            orient = orientationField(img, MASK_BLOCK);
+            saveOrientation(img, orient, mask, outDir + "03_orientation.png");
+            s.done(std::to_string(orient.width) + " x " + std::to_string(orient.height) + " blocks");
+        }
+
+        BlockField freq;
+        {
+            ui::Stage s("Frequency");
+            freq = frequencyField(img, orient, mask);
+            saveFrequency(freq, mask, outDir + "04_frequency.png");
+
+            //average ridge period over the finger, as a sanity check (about 9 px at 500 dpi)
+            double sum = 0;
+            int count = 0;
+            for (float f : freq.values) {
+                if (f > 0) {
+                    sum += 1.0 / f;
+                    count++;
+                }
+            }
+            s.done("mean ridge period " + ui::fixed(sum / count, 1) + " px");
+        }
+
+        {
+            ui::Stage s("Gabor");
+            img = gaborFilter(img, orient, freq, mask);
+            saveGray(img, outDir + "05_enhanced.png");
+            s.done("ridges cleaned");
+        }
     }
 
     // ---- Binarize (Checkpoint A) ---------------------------------------
@@ -232,7 +279,7 @@ std::string runMenu(const std::string& path, const std::string& outDir, const Te
             askNameAndFinger(name, finger);
             try {
                 ui::Stage s("Cataloguing");
-                std::string id = catalogue(path, outDir, name, finger);
+                std::string id = catalogue(path, outDir, name, finger, pipelineVersion());
                 s.done("ID " + id + "  " + name + "  " + finger);
                 return "Catalogued as " + id + ". Files are in db/";
             } catch (const std::exception& e) {
@@ -295,7 +342,7 @@ std::string runImport(const std::string& folder) {
                 ui::Mute quiet; //hide this print's own stages
                 std::string outDir = outDirFor(images[i]);
                 analyzePrint(images[i], outDir);
-                lastId = catalogue(images[i], outDir, name, "unknown");
+                lastId = catalogue(images[i], outDir, name, "unknown", pipelineVersion());
                 if(firstId.empty()) firstId = lastId;
             } catch (const std::exception& e) {
                 failed.push_back(name + ": " + e.what()); //keep going, one bad print shouldn't stop the rest
@@ -447,18 +494,26 @@ void printUsage(const char* program) {
     std::cerr << "usage:\n"
               << "  " << program << " <image>            analyze one print, then show the menu\n"
               << "  " << program << " import <folder>    analyze and catalogue every image in a folder\n"
-              << "  " << program << " eval <folder>      run the FVC test on an FVC B set\n";
+              << "  " << program << " eval <folder>      run the FVC test on an FVC B set\n"
+              << "add --no-enhance to any of them to skip the orientation, frequency and Gabor stages\n";
 }
 
 int main(int argc, char** argv) {
-    if (argc < 2) {
+    //pull out the --no-enhance flag wherever it is, keep everything else in order
+    std::vector<std::string> args;
+    for (int i = 1; i < argc; i++) {
+        std::string a = argv[i];
+        if (a == "--no-enhance") useEnhance = false;
+        else args.push_back(a);
+    }
+    if (args.empty()) {
         printUsage(argv[0]);
         return 1;
     }
-    std::string command = argv[1];
+    std::string command = args[0];
 
     //import and eval need a folder after them
-    if ((command == "import" || command == "eval") && argc < 3) {
+    if ((command == "import" || command == "eval") && args.size() < 2) {
         printUsage(argv[0]);
         return 1;
     }
@@ -466,10 +521,10 @@ int main(int argc, char** argv) {
     ui::banner();
     try {
         if (command == "import") {
-            ui::finalScreen(true, runImport(argv[2]));
+            ui::finalScreen(true, runImport(args[1]));
         }
         else if (command == "eval") {
-            ui::finalScreen(true, runEval(argv[2]));
+            ui::finalScreen(true, runEval(args[1]));
         }
         else {
             std::string path = command;   //no command word, so it's an image

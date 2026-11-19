@@ -24,8 +24,15 @@ const double MAX_ROTATION_DEG = 60;
 const double MAX_SHIFT_PX = 300;
 
 // Only let an ending vote with an ending and a bifurcation with a bifurcation.
-// Off by default, because pressing harder can turn an ending into a bifurcation.
-const bool SAME_TYPE_ONLY = false;
+// Pressing harder can turn an ending into a bifurcation, so this was off at
+// first. With Gabor enhancement the types are reliable enough that it helps:
+// EER 15.5% -> 15.3% and far fewer impostor votes.
+const bool SAME_TYPE_ONLY = true;
+
+// How many of the best Hough peaks to try. Each one gets paired up and scored,
+// and the best score wins. A noisy bin can beat the true one by a vote or two,
+// so trying a few makes sure the real alignment gets a turn.
+const int HOUGH_PEAKS = 5;
 
 // Pairing: after alignment, two minutiae pair up when they are this close.
 // Skin stretches, so these need some slack.
@@ -35,8 +42,18 @@ const double MATCH_ANGLE_DEG = 20;
 // A print with fewer minutiae than this can't be matched with any confidence.
 const int MIN_MINUTIAE = 5;
 
+// Overlap: two impressions of a finger rarely cover the same skin. A minutia
+// only counts toward the score if it landed within this distance of some
+// minutia of the other print, meaning it's inside the area both prints share.
+const bool OVERLAP_ONLY = false;
+const double OVERLAP_RADIUS_PX = 40;
+
+// Overlap: never divide by fewer than this many minutiae, so a tiny overlap
+// with 3 lucky pairs can't score like a full match.
+const int MIN_OVERLAP = 10;
+
 // Scores at or above this are called a MATCH. Set from the EER of "fpmatch eval".
-extern const double MATCH_THRESHOLD = 0.030;
+extern const double MATCH_THRESHOLD = 0.028;
 
 // =============================================================================
 
@@ -65,8 +82,8 @@ Minutia transformMinutia(const Minutia& m, const Alignment& al) {
     return out;
 }
 
-// alignTemplates: finds the rotation and shift that puts the most minutiae of
-// A on top of minutiae of B, using Hough voting.
+// alignTemplates: finds the rotations and shifts that put the most minutiae of
+// A on top of minutiae of B, using Hough voting. Returns the HOUGH_PEAKS best.
 //
 // The idea: if a minutia in A really is the same point as a minutia in B, then
 // the difference between their angles is the rotation, and after turning A by
@@ -74,7 +91,7 @@ Minutia transformMinutia(const Minutia& m, const Alignment& al) {
 // A, one from B) works out that rotation and shift and casts one vote for it.
 // Wrong pairs vote all over the place. Right pairs all vote for the same
 // answer, so that bin piles up votes and wins.
-Alignment alignTemplates(const Template& a, const Template& b) {
+std::vector<Alignment> alignTemplates(const Template& a, const Template& b) {
     Alignment al;
     al.cx = a.width / 2.0;
     al.cy = a.height / 2.0;
@@ -126,73 +143,107 @@ Alignment alignTemplates(const Template& a, const Template& b) {
         }
     }
 
-    //find the winner. a real match often lands right on the line between two
-    //bins and splits its votes, so we score each bin by adding up its 3 x 3 x 3
-    //neighborhood instead of looking at it alone
-    int bestR = 0, bestX = 0, bestY = 0;
-    int bestVotes = 0;
+    //score every bin by adding up its 3 x 3 x 3 neighborhood. a real match often
+    //lands right on the line between two bins and splits its votes, so looking
+    //at a bin alone would miss it
+    std::vector<int> totals(votes.size(), 0);
     for(int r = 0; r < rotBins; r++){
         for(int Y = 0; Y < shiftBins; Y++){
             for(int X = 0; X < shiftBins; X++){
-                if(bin(r, X, Y) == 0) continue; //empty bins can't win, skip them fast
-
-                int total = 0;
+                if(bin(r, X, Y) == 0) continue; //only bins near votes can win, the rest stay 0
                 for(int nr = r - 1; nr <= r + 1; nr++){
                     for(int ny = Y - 1; ny <= Y + 1; ny++){
                         for(int nx = X - 1; nx <= X + 1; nx++){
                             if(nr < 0 || nr >= rotBins || ny < 0 || ny >= shiftBins || nx < 0 || nx >= shiftBins) continue;
-                            total += bin(nr, nx, ny);
+                            //this bin's votes count for every neighbor around it
+                            totals[(nr * shiftBins + ny) * shiftBins + nx] += bin(r, X, Y);
                         }
                     }
-                }
-                if(total > bestVotes){
-                    bestVotes = total;
-                    bestR = r;
-                    bestX = X;
-                    bestY = Y;
                 }
             }
         }
     }
-    al.votes = bestVotes;
-    if(bestVotes == 0) return al; //no votes at all, leave it unrotated and unshifted
 
-    //the bin center is only accurate to half a bin. average the exact numbers
-    //of every vote in the winning neighborhood to get a sharper answer.
-    //rotations are averaged as sin and cos so -179 and 179 average to 180, not 0
-    double sumSin = 0, sumCos = 0, sumDx = 0, sumDy = 0;
-    int count = 0;
-    for(size_t i = 0; i < a.minutiae.size(); i++){
-        for(size_t j = 0; j < b.minutiae.size(); j++){
-            int r, x, y;
-            double rot, dx, dy;
-            if(!voteFor(i, j, r, x, y, rot, dx, dy)) continue;
-            if(std::abs(r - bestR) > 1 || std::abs(x - bestX) > 1 || std::abs(y - bestY) > 1) continue; //not in the winning neighborhood
-            sumSin += std::sin(rot);
-            sumCos += std::cos(rot);
-            sumDx += dx;
-            sumDy += dy;
-            count++;
+    //pick the top peaks. after each pick, wipe out the totals right around it
+    //so the next pick is a really different alignment, not the same one again
+    std::vector<Alignment> peaks;
+    for(int k = 0; k < HOUGH_PEAKS; k++){
+        int best = -1;
+        for(size_t i = 0; i < totals.size(); i++){
+            if(totals[i] > 0 && (best < 0 || totals[i] > totals[best])) best = i;
+        }
+        if(best < 0) break; //no votes left
+
+        //turn the flat index back into (r, x, y)
+        int bestX = best % shiftBins;
+        int bestY = (best / shiftBins) % shiftBins;
+        int bestR = best / (shiftBins * shiftBins);
+        Alignment peak = al;
+        peak.votes = totals[best];
+
+        //the bin center is only accurate to half a bin. average the exact numbers
+        //of every vote in the winning neighborhood to get a sharper answer.
+        //rotations are averaged as sin and cos so -179 and 179 average to 180, not 0
+        double sumSin = 0, sumCos = 0, sumDx = 0, sumDy = 0;
+        int count = 0;
+        for(size_t i = 0; i < a.minutiae.size(); i++){
+            for(size_t j = 0; j < b.minutiae.size(); j++){
+                int r, x, y;
+                double rot, dx, dy;
+                if(!voteFor(i, j, r, x, y, rot, dx, dy)) continue;
+                if(std::abs(r - bestR) > 1 || std::abs(x - bestX) > 1 || std::abs(y - bestY) > 1) continue; //not in this neighborhood
+                sumSin += std::sin(rot);
+                sumCos += std::cos(rot);
+                sumDx += dx;
+                sumDy += dy;
+                count++;
+            }
+        }
+        peak.rotation = std::atan2(sumSin, sumCos);
+        peak.dx = sumDx / count;
+        peak.dy = sumDy / count;
+        peaks.push_back(peak);
+
+        //wipe a 5 x 5 x 5 area around this peak
+        for(int nr = bestR - 2; nr <= bestR + 2; nr++){
+            for(int ny = bestY - 2; ny <= bestY + 2; ny++){
+                for(int nx = bestX - 2; nx <= bestX + 2; nx++){
+                    if(nr < 0 || nr >= rotBins || ny < 0 || ny >= shiftBins || nx < 0 || nx >= shiftBins) continue;
+                    totals[(nr * shiftBins + ny) * shiftBins + nx] = 0;
+                }
+            }
         }
     }
-    al.rotation = std::atan2(sumSin, sumCos);
-    al.dx = sumDx / count;
-    al.dy = sumDy / count;
-    return al;
+
+    if(peaks.empty()) peaks.push_back(al); //no votes at all, leave it unrotated and unshifted
+    return peaks;
 }
 
-// matchTemplates: aligns A onto B, pairs up minutiae and scores the result.
-MatchResult matchTemplates(const Template& a, const Template& b) {
+// countOverlap: how many minutiae in `points` have some minutia of `other`
+// within OVERLAP_RADIUS_PX, meaning they sit in the area both prints cover.
+int countOverlap(const std::vector<Minutia>& points, const std::vector<Minutia>& other) {
+    int count = 0;
+    for(const Minutia& p : points){
+        for(const Minutia& o : other){
+            if(distance(p, o) <= OVERLAP_RADIUS_PX){
+                count++;
+                break; //one neighbor is enough
+            }
+        }
+    }
+    return count;
+}
+
+// pairAndScore: moves A by one alignment, pairs up minutiae and scores it.
+MatchResult pairAndScore(const Template& a, const Template& b, const Alignment& al) {
     MatchResult result;
+    result.alignment = al;
     int nA = a.minutiae.size();
     int nB = b.minutiae.size();
-    if(nA < MIN_MINUTIAE || nB < MIN_MINUTIAE) return result; //not enough to go on, score 0
-
-    result.alignment = alignTemplates(a, b);
 
     //move every minutia of A into B's position
     std::vector<Minutia> moved;
-    for(const Minutia& m : a.minutiae) moved.push_back(transformMinutia(m, result.alignment));
+    for(const Minutia& m : a.minutiae) moved.push_back(transformMinutia(m, al));
 
     //list every pair that is close enough in both distance and angle
     struct Candidate {
@@ -222,13 +273,40 @@ MatchResult matchTemplates(const Template& a, const Template& b) {
         usedB[c.j] = true;
         result.pairs.push_back({c.i, c.j});
     }
-
-    //score: matched / nA is "how much of A was found in B" and matched / nB is
-    //the other way around. multiplying them means both prints have to agree,
-    //so a print with hundreds of noisy minutiae can't match everything by luck
     result.matched = result.pairs.size();
-    result.score = (double)result.matched * result.matched / ((double)nA * nB);
+
+    //how many minutiae each print brings to the comparison. normally all of them,
+    //but with OVERLAP_ONLY just the ones inside the shared area
+    double countA = nA;
+    double countB = nB;
+    if(OVERLAP_ONLY){
+        countA = std::max(countOverlap(moved, b.minutiae), MIN_OVERLAP);
+        countB = std::max(countOverlap(b.minutiae, moved), MIN_OVERLAP);
+        countA = std::max(countA, (double)result.matched); //can't match more than we counted
+        countB = std::max(countB, (double)result.matched);
+    }
+
+    //score: matched / countA is "how much of A was found in B" and
+    //matched / countB is the other way around. multiplying them means both
+    //prints have to agree, so a print with hundreds of noisy minutiae can't
+    //match everything by luck
+    result.score = result.matched * result.matched / (countA * countB);
     return result;
+}
+
+// matchTemplates: aligns A onto B, pairs up minutiae and scores the result.
+// Tries each of the top Hough peaks and keeps the best score.
+MatchResult matchTemplates(const Template& a, const Template& b) {
+    MatchResult best;
+    if((int)a.minutiae.size() < MIN_MINUTIAE || (int)b.minutiae.size() < MIN_MINUTIAE) return best; //not enough to go on, score 0
+
+    std::vector<Alignment> peaks = alignTemplates(a, b);
+    best = pairAndScore(a, b, peaks[0]); //the strongest peak wins ties
+    for(size_t k = 1; k < peaks.size(); k++){
+        MatchResult r = pairAndScore(a, b, peaks[k]);
+        if(r.score > best.score) best = r;
+    }
+    return best;
 }
 
 // saveAligned: draws B's minutiae in blue and A's moved minutiae in red, with a

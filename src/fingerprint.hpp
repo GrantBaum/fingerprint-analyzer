@@ -149,7 +149,7 @@ struct MatchResult {
 
 extern const double MATCH_THRESHOLD;
 Minutia transformMinutia(const Minutia& m, const Alignment& al);
-Alignment alignTemplates(const Template& a, const Template& b);
+std::vector<Alignment> alignTemplates(const Template& a, const Template& b);
 MatchResult matchTemplates(const Template& a, const Template& b);
 void saveAligned(const Template& a, const Template& b, const MatchResult& result, const std::string& path);
 
@@ -175,6 +175,31 @@ struct SearchHit {
 
 std::vector<DbEntry> readIndex();
 std::string catalogue(const std::string& rawPath, const std::string& outDir,
-                      const std::string& name, const std::string& finger);
+                      const std::string& name, const std::string& finger, const std::string& version);
 std::vector<SearchHit> searchDatabase(const Template& probe, int topN);
 void discard(const std::string& outDir);
+
+// ---- enhance.cpp --------------------------------------------------------------
+
+// BlockField: one number per block of the image, like the ridge angle or the
+// ridge frequency of each 16 x 16 block.
+struct BlockField {
+    int block = 16;     // block size in pixels
+    int width = 0;      // blocks across
+    int height = 0;     // blocks down
+    std::vector<float> values;
+
+    //indexing helpers
+    float& at(int x, int y) {
+        return values[y * width + x];
+    }
+    float at(int x, int y) const {
+        return values[y * width + x];
+    }
+};
+
+BlockField orientationField(const GrayImage& img, int block);
+void saveOrientation(const GrayImage& img, const BlockField& orient, const BinaryImage& mask, const std::string& path);
+BlockField frequencyField(const GrayImage& img, const BlockField& orient, const BinaryImage& mask);
+void saveFrequency(const BlockField& freq, const BinaryImage& mask, const std::string& path);
+GrayImage gaborFilter(const GrayImage& img, const BlockField& orient, const BlockField& freq, const BinaryImage& mask);
